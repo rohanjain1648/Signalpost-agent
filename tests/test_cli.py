@@ -174,3 +174,69 @@ def test_no_discovery_flag_is_reported_and_still_researches_registry_candidates(
     report = json.loads(Path(str(out) + ".report.json").read_text(encoding="utf-8"))
     assert report["discovery_enabled"] is False
     assert "official_website" in _claims(out)
+
+
+# ---- NAV job feed ----------------------------------------------------------------
+
+from signalpost.nav import NavIndex, save_index  # noqa: E402
+from test_nav import Feed, detail  # noqa: E402
+
+
+def nav_client_factory(feed):
+    urls = _fixture_urls(GOOD)
+
+    def factory(max_requests):
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if url in urls:
+                return httpx.Response(200, content=(FIXTURES / urls[url]).read_bytes(),
+                                      headers={"content-type": "application/json"})
+            if "pam-stilling-feed" in url:
+                return feed.handler(request)
+            return httpx.Response(503, text="down")
+
+        return CountingClient(transport=httpx.MockTransport(handler), max_requests=max_requests,
+                              resolver=lambda h: ["8.8.8.8"])
+
+    return factory
+
+
+def run_nav_cli(tmp_path, feed, extra=(), index=True):
+    nav_index = tmp_path / "nav.json.gz"
+    if index:
+        save_index(NavIndex(built_at="2026-09-20T10:00:00Z", since="2026-03-26",
+                            by_name={"sandnes elektriske": ["a1"]}), nav_index)
+    out = tmp_path / "out" / "envelopes.jsonl"
+    main(["--input", str(write_input(tmp_path, [GOOD])), "--output", str(out), "--run-id", "r1", "--no-web",
+          "--nav-index", str(nav_index), *extra], client_factory=nav_client_factory(feed))
+    report = json.loads(Path(str(out) + ".report.json").read_text(encoding="utf-8"))
+    return {c["field"]: c for c in read_jsonl(out)[0]["claims"]}, report
+
+
+def test_nav_jobs_appear_in_the_hiring_claim_and_the_report_describes_the_feed(tmp_path):
+    claims, report = run_nav_cli(tmp_path, Feed(details={"a1": detail("a1", GOOD)}))
+    assert claims["hiring"]["availability"] == "available"
+    assert report["nav_enabled"] is True and report["nav_index_loaded"] is True
+    assert report["nav_index_built_at"] == "2026-09-20T10:00:00Z"
+    assert report["nav_prepare"]["ready"] is True
+
+
+def test_an_unreachable_nav_feed_yields_failed_hiring_not_a_crash(tmp_path):
+    claims, report = run_nav_cli(tmp_path, Feed(token_status=503))
+    assert claims["hiring"]["availability"] == "failed"
+    assert report["nav_prepare"]["ready"] is False
+    assert report["terminal_status_counts"] == {"completed": 1}
+
+
+def test_a_missing_nav_index_disables_nav_with_a_warning(tmp_path, capsys):
+    claims, report = run_nav_cli(tmp_path, Feed(), index=False)
+    assert "hiring" not in claims
+    assert report["nav_enabled"] is False and report["nav_index_loaded"] is False
+    assert "nav" in capsys.readouterr().err.lower()
+
+
+def test_no_nav_flag_makes_no_feed_requests(tmp_path):
+    feed = Feed(details={"a1": detail("a1", GOOD)})
+    claims, report = run_nav_cli(tmp_path, feed, extra=("--no-nav",))
+    assert report["nav_enabled"] is False
+    assert not any("pam-stilling-feed" in url for url, _, _ in feed.calls)

@@ -20,6 +20,7 @@ from typing import Callable, Sequence
 from . import AGENT_VERSION, SCHEMA_VERSION
 from .batch import read_organisation_numbers, run_batch
 from .domains import load_table
+from .nav import NavJobs, load_index
 from .models import Envelope
 from .net import PRODUCTION_THROTTLES, CountingClient
 from .pipeline import WebResearch, process_company
@@ -27,6 +28,7 @@ from .robots import RobotsCache
 from .store import load_state, save_state
 
 DEFAULT_MAX_REQUESTS = 1900  # evaluator hard cap is 2,000 including redirects and retries
+DEFAULT_NAV_INDEX = str(Path(__file__).resolve().parents[2] / "data" / "nav_jobs_index.json.gz")
 DEFAULT_DOMAIN_TABLE = str(Path(__file__).resolve().parents[2] / "data" / "domain_multiplicity.json.gz")
 
 ClientFactory = Callable[[int], CountingClient]
@@ -46,6 +48,9 @@ def main(argv: Sequence[str] | None = None, *, client_factory: ClientFactory | N
     parser.add_argument("--domain-table", default=DEFAULT_DOMAIN_TABLE,
                         help="shared-domain table built from the BRREG bulk file (see scripts/build_domain_table.py)")
     parser.add_argument("--no-web", action="store_true", help="skip website research (official data only)")
+    parser.add_argument("--nav-index", default=DEFAULT_NAV_INDEX,
+                        help="NAV job-feed name index (see scripts/build_nav_index.py)")
+    parser.add_argument("--no-nav", action="store_true", help="do not query the NAV job feed")
     parser.add_argument("--no-discovery", action="store_true",
                         help="do not guess name-derived domains for companies without a registry candidate")
     args = parser.parse_args(argv)
@@ -63,9 +68,23 @@ def main(argv: Sequence[str] | None = None, *, client_factory: ClientFactory | N
               file=sys.stderr)
     web = None if args.no_web else WebResearch(robots=RobotsCache(client), multiplicity=table, discover=not args.no_discovery)
 
+    nav = None
+    nav_index = None
+    nav_prepare: dict | None = None
+    if not args.no_nav:
+        nav_index = load_index(args.nav_index)
+        if nav_index is None:
+            print(f"warning: NAV job index {args.nav_index!r} not found; NAV jobs are disabled", file=sys.stderr)
+        else:
+            nav = NavJobs(nav_index, client)
+            nav_prepare = nav.prepare()
+            if not nav_prepare["ready"]:
+                print(f"warning: NAV feed not ready ({nav_prepare.get('error')}); hiring will be reported as failed",
+                      file=sys.stderr)
+
     def worker(org: str) -> Envelope:
         prev = load_state(args.state_dir, org)
-        envelope, state = process_company(org, client, run_id=run_id, run_ts=run_ts, prev_state=prev, web=web)
+        envelope, state = process_company(org, client, run_id=run_id, run_ts=run_ts, prev_state=prev, web=web, nav=nav)
         save_state(args.state_dir, org, state)
         return envelope
 
@@ -96,6 +115,10 @@ def main(argv: Sequence[str] | None = None, *, client_factory: ClientFactory | N
         "web_enabled": web is not None,
         "discovery_enabled": web is not None and web.discover,
         "dns_lookups": client.dns_lookups,
+        "nav_enabled": nav is not None,
+        "nav_index_loaded": nav_index is not None,
+        "nav_index_built_at": nav_index.built_at if nav_index else None,
+        "nav_prepare": nav_prepare,
         "domain_table_loaded": table is not None,
         "domain_table_shared_domains": None if table is None else len(table),
         "runtime_ms": int((time.monotonic() - started) * 1000),
