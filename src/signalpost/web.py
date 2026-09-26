@@ -11,7 +11,7 @@ import urllib.parse
 from typing import Any
 
 from .extract import ATS_HOSTS, extract_page
-from .identity import FREEMAIL_DOMAINS, assess_site, candidate_domains
+from .identity import FREEMAIL_DOMAINS, assess_site, candidate_domains, social_matches_entity
 from .net import CountingClient, FetchResult
 from .robots import RobotsCache
 
@@ -104,6 +104,7 @@ def _empty(status: str, candidates: list[dict[str, Any]]) -> dict[str, Any]:
         "status": status, "candidates": candidates, "proof": None, "homepage": None, "pages": [],
         "socials": [], "emails": [], "phones": [], "jobs": [], "careers_links": [], "news_links": [],
         "structured_organizations": [], "contact_sources": {}, "careers_checked": False,
+        "quarantined_socials": [],
     }
 
 
@@ -150,6 +151,18 @@ def _fan_out(home: FetchResult, home_extract: dict[str, Any], client: CountingCl
         merge(extraction, page.final_url or url)
 
 
+def _gate_socials(entity: dict[str, Any], result: dict[str, Any]) -> None:
+    """Keep only profiles whose handle relates to this company; quarantine the rest."""
+    brand = result["homepage"].get("site_name") or next(
+        (o["name"] for o in result["structured_organizations"] if o.get("name")), None)
+    label = _host(result["homepage"]["final_url"] or "").removeprefix("www.").split(".")[0]
+    accepted, quarantined = [], []
+    for social in result["socials"]:
+        (accepted if social_matches_entity(entity, brand, label, social) else quarantined).append(social)
+    result["socials"] = accepted
+    result["quarantined_socials"] = quarantined
+
+
 def research_website(
     entity: dict[str, Any],
     client: CountingClient,
@@ -193,6 +206,7 @@ def research_website(
                 "site_name": extraction["site_name"],
             }
             _fan_out(fetch, extraction, client, robots, max_pages, result)
+            _gate_socials(entity, result)
             return result
 
     outcomes = {c["outcome"] for c in candidates}

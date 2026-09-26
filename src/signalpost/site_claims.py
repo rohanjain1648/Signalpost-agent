@@ -34,6 +34,13 @@ def entity_unavailable_claims(entity_status: str) -> list[Claim]:
                   note="registry entity could not be read") for name in WEB_FIELDS]
 
 
+def _no_profiles_note(quarantined: int) -> str:
+    if quarantined:
+        return (f"{quarantined} profile link(s) on the site were not published because they could not be "
+                "tied to this company")
+    return "the verified site links to no company-owned social profiles"
+
+
 def failed_site_output(note: str) -> SiteOutput:
     """Website research crashed: report every website family as failed and leave the ledger stale."""
     out = SiteOutput(failed=set(WEB_FAMILIES))
@@ -112,7 +119,7 @@ def build_site_output(site: dict[str, Any]) -> SiteOutput:
         field="company_profiles", value=socials or None, availability="available" if socials else "not_available",
         confidence=confidence if socials else None,
         evidence_ids=cite(*[s["page_url"] for s in site["socials"]]) if socials else ["ev-site-home"],
-        note=None if socials else "the verified site links to no company-owned social profiles",
+        note=None if socials else _no_profiles_note(len(site.get("quarantined_socials") or [])),
     ))
 
     emails, phones = site["emails"], site["phones"]

@@ -250,3 +250,12 @@ def test_nothing_reachable_is_failed_not_blocked():
     result, _, _ = run(EMAIL_ONLY, client_bundle=bundle)
     assert result["status"] in {"failed", "not_available"}
     assert result["status"] != "blocked"
+
+
+def test_social_links_that_do_not_relate_to_the_company_are_quarantined_not_published():
+    home = HOME.replace('<a href="https://www.facebook.com/sandneselektriske">FB</a>',
+                        '<a href="https://www.facebook.com/sandneselektriske">FB</a>'
+                        '<a href="https://www.facebook.com/somewebagency">Laget av</a>')
+    result, _, _ = run(client_bundle=site({f"{HOST}/": (200, home)}))
+    assert [s["url"] for s in result["socials"]] == ["https://www.facebook.com/sandneselektriske"]
+    assert [s["url"] for s in result["quarantined_socials"]] == ["https://www.facebook.com/somewebagency"]

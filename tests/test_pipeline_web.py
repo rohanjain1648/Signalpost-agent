@@ -198,3 +198,14 @@ def test_a_crash_in_website_research_never_discards_the_official_data(monkeypatc
     assert "parser exploded" in envelope.errors[-1]["message"]
     assert envelope.run.terminal_status == "completed"
     assert any(c["family"] == "roles" for c in state.values())
+
+
+def test_quarantined_profiles_are_explained_in_the_claim_note_but_never_published():
+    home = HOME.replace('<a href="https://www.facebook.com/sandneselektriske">FB</a>',
+                        '<a href="https://www.facebook.com/somewebagency">Laget av</a>')
+    envelope, state = run(make({f"{HOST}/": (200, home)}))
+    claim = by_field(envelope)["company_profiles"]
+    assert claim.availability == "not_available" and claim.value is None
+    assert "1 profile link" in claim.note and "could not be tied" in claim.note
+    assert "somewebagency" not in envelope.model_dump_json()
+    assert not any(c["family"] == "socials" for c in state.values())

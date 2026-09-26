@@ -259,3 +259,47 @@ def test_a_real_title_with_the_name_still_verifies():
         "email_domain", {},
     )
     assert result["status"] == "exact"
+
+
+# ---- social profile relevance ---------------------------------------------------
+
+from signalpost.identity import social_matches_entity  # noqa: E402
+
+PRETO = {"name": "PRETO ASKEVOLD ADVOKATFIRMA DA",
+         "historical_names": [{"navn": "ADVOKATFIRMA ALVHEIM OG HANSEN ANS"}]}
+
+
+def social(platform, url, source="link"):
+    return {"platform": platform, "url": url, "source": source}
+
+
+def test_handle_containing_the_legal_name_brand_or_domain_label_is_relevant():
+    entity = {"name": "VESETH AS", "historical_names": []}
+    assert social_matches_entity(entity, "Veseth", "vesethas", social("instagram", "https://www.instagram.com/veseth_survey"))
+    assert social_matches_entity(entity, None, "vesethas", social("linkedin", "https://www.linkedin.com/company/veseth-as"))
+    assert social_matches_entity(entity, None, "vesethas", social("facebook", "https://www.facebook.com/vesethas"))
+    assert social_matches_entity({"name": "X AS"}, "Minfirma", "x", social("facebook", "https://www.facebook.com/minfirma"))
+
+
+def test_handle_matching_a_historical_registry_name_is_relevant():
+    assert social_matches_entity(PRETO, "Preto Askevold Advokatfirma", "preto",
+                                 social("facebook", "https://m.facebook.com/alvheimhansen"))
+
+
+def test_unrelated_handle_is_not_relevant():
+    entity = {"name": "VESETH AS", "historical_names": []}
+    assert not social_matches_entity(entity, "Veseth", "vesethas",
+                                     social("facebook", "https://www.facebook.com/somewebagency"))
+
+
+def test_generic_words_alone_do_not_make_a_handle_relevant():
+    entity = {"name": "SANDNES BYGG OG EIENDOM AS", "historical_names": []}
+    assert not social_matches_entity(entity, None, "sandnesbygg",
+                                     social("facebook", "https://www.facebook.com/eiendomsmegleren"))
+
+
+def test_numeric_or_opaque_handles_are_not_relevant_unless_declared_in_json_ld():
+    entity = {"name": "VESETH AS", "historical_names": []}
+    assert not social_matches_entity(entity, None, "x", social("facebook", "https://www.facebook.com/pages/Firma/12345"))
+    assert not social_matches_entity(entity, None, "x", social("youtube", "https://www.youtube.com/channel/UCabc123"))
+    assert social_matches_entity(entity, None, "x", social("youtube", "https://www.youtube.com/channel/UCabc123", "json_ld"))

@@ -211,3 +211,55 @@ def assess_site(
                        _context(text, postal_hit.start(), postal_hit.end()))
 
     return _result("ambiguous", None, ["no exact-entity anchor found"], matched)
+
+
+# ---- social profile relevance ---------------------------------------------------
+
+GENERIC_NAME_WORDS = {
+    "eiendom", "eiendommer", "holding", "invest", "investering", "transport", "service", "services", "bygg",
+    "norge", "norway", "group", "gruppen", "consulting", "consult", "utvikling", "drift", "forvaltning",
+    "entreprenor", "borettslag", "sameie", "regnskap", "design", "teknikk", "elektro", "elektriske",
+    "rorlegger", "maler", "maleren", "advokatfirma", "advokat", "eiendomsmegler", "restaurant", "kafe",
+    "butikk", "industri", "produksjon", "solutions", "systems", "partner", "partners", "management",
+}
+
+
+def _compact(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", _fold(value))
+
+
+def _social_handle(url: str) -> str:
+    segments = [s for s in urllib.parse.unquote(urllib.parse.urlparse(url).path).split("/") if s]
+    if not segments:
+        return ""
+    first = segments[0].lower()
+    if first in {"company", "school", "channel", "c", "user"} and len(segments) >= 2:
+        return segments[1]
+    if first in {"pages", "people"} and len(segments) >= 2:
+        return segments[1]
+    return segments[0].lstrip("@")
+
+
+def social_matches_entity(
+    entity: dict[str, Any], brand: str | None, domain_label: str | None, profile: dict[str, str]
+) -> bool:
+    """Is this profile's handle tied to the entity's name, brand, domain or a historical name?
+
+    A site's own JSON-LD `sameAs` declaration is accepted as-is. Otherwise a profile linked from a
+    verified site is published only when its handle relates to this company: a link may just as
+    well be a web agency's credit, a partner, or a sponsor.
+    """
+    if profile.get("source") == "json_ld":
+        return True
+    handle = _compact(_social_handle(profile["url"]))
+    if len(handle) < 4 or handle.isdigit():
+        return False
+
+    names = [entity.get("name"), brand, *[h.get("navn") for h in entity.get("historical_names") or []]]
+    candidates: set[str] = {_compact(domain_label)} if domain_label else set()
+    for name in names:
+        tokens = name_tokens(name)
+        if tokens:
+            candidates.add("".join(tokens))
+        candidates.update(t for t in tokens if len(t) >= 6 and t not in GENERIC_NAME_WORDS)
+    return any(len(c) >= 4 and (c in handle or (len(handle) >= 5 and handle in c)) for c in candidates)
