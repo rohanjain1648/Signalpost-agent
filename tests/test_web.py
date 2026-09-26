@@ -48,6 +48,8 @@ def site(overrides=None, robots="User-agent: *\nDisallow:\n", unresolvable=()):
         status, body = routes[url]
         if status == "connect_error":
             raise httpx.ConnectError("connection refused")
+        if status == "timeout":
+            raise httpx.ReadTimeout("timed out")
         if status in (301, 302):
             return httpx.Response(status, headers={"location": body})
         return httpx.Response(status, text=body, headers={"content-type": "text/html; charset=utf-8"})
@@ -248,8 +250,8 @@ def test_nothing_reachable_is_failed_not_blocked():
         f"{HOST}/robots.txt": ("connect_error", ""), f"{HOST}/": ("connect_error", ""),
     })
     result, _, _ = run(EMAIL_ONLY, client_bundle=bundle)
-    assert result["status"] in {"failed", "not_available"}
-    assert result["status"] != "blocked"
+    assert result["status"] == "not_available"  # no web server answers: nothing to find, nothing broke
+    assert "no web server" in result["candidates"][0]["reason"]
 
 
 def test_social_links_that_do_not_relate_to_the_company_are_quarantined_not_published():
@@ -259,3 +261,23 @@ def test_social_links_that_do_not_relate_to_the_company_are_quarantined_not_publ
     result, _, _ = run(client_bundle=site({f"{HOST}/": (200, home)}))
     assert [s["url"] for s in result["socials"]] == ["https://www.facebook.com/sandneselektriske"]
     assert [s["url"] for s in result["quarantined_socials"]] == ["https://www.facebook.com/somewebagency"]
+
+
+def test_a_placeholder_page_means_no_company_site_exists_yet():
+    home = "<html><title>liivat.no</title><body>This is the future home of: www.liivat.no</body></html>"
+    entity = {**ENTITY, "name": "LIIVAT AS", "website": None, "email": "info@liivat.no"}
+    bundle = site({"https://liivat.no/": (200, home)})
+    result, _, _ = run(entity, client_bundle=bundle)
+    assert result["status"] == "not_available"
+    assert result["socials"] == [] and result["pages"] == []
+
+
+def test_a_timeout_is_still_failed_because_it_may_be_transient():
+    class TimeoutOnce(httpx.MockTransport):
+        pass
+
+    bundle = site({"https://sandneselektriske.no/robots.txt": ("timeout", ""),
+                   "https://sandneselektriske.no/": ("timeout", ""),
+                   f"{HOST}/robots.txt": ("timeout", ""), f"{HOST}/": ("timeout", "")})
+    result, _, _ = run(EMAIL_ONLY, client_bundle=bundle)
+    assert result["status"] == "failed"

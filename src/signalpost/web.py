@@ -75,6 +75,8 @@ def _fetch_outcome(fetch: FetchResult) -> tuple[str, str] | None:
         return "not_available", "domain does not resolve"
     if error.startswith("blocked:"):
         return "not_available", "URL rejected by the safe-URL policy"
+    if error == "ConnectError":
+        return "not_available", "no web server accepts connections at this domain"
     if fetch.status == 0:
         return "failed", error or "network error"
     if fetch.status >= 500:
@@ -196,7 +198,8 @@ def research_website(
             "identity_text": extraction["identity_text"], "structured_names": extraction["structured_names"],
         }
         assessment = assess_site(entity, page, candidate["source"], multiplicity or {})
-        record["outcome"], record["reason"] = assessment["status"], "; ".join(assessment["reasons"])
+        outcome = "not_available" if assessment["status"] == "placeholder" else assessment["status"]
+        record["outcome"], record["reason"] = outcome, "; ".join(assessment["reasons"])
         candidates.append(record)
         if assessment["status"] == "exact":
             result = _empty("available", candidates)

@@ -124,11 +124,11 @@ def test_different_org_number_on_page_marks_related_parent():
     assert result["publishable"] is False
 
 
-def test_parked_page_is_ambiguous():
+def test_parked_page_is_a_placeholder_not_a_verified_or_ambiguous_site():
     result = assess_site(
         ENTITY, page(title="Sandnes Elektriske", text="This domain is for sale"), "registry_website", {"sandneselektriske.no": 1}
     )
-    assert result["status"] == "ambiguous"
+    assert result["status"] == "placeholder"
 
 
 def test_partial_name_overlap_is_ambiguous():
@@ -239,7 +239,8 @@ def test_placeholder_pages_are_ambiguous_even_when_the_domain_matches_the_name()
             LIIVAT, page(title="liivat.no", text=text, final_url="https://liivat.no/"),
             "email_domain", {}
         )
-        assert result["status"] == "ambiguous", text
+        assert result["status"] == "placeholder", text
+        assert result["publishable"] is False
 
 
 def test_a_title_that_only_echoes_the_hostname_is_not_identity_evidence():

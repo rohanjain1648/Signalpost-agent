@@ -7,7 +7,8 @@ Proof tiers (see PLAN.md section 4):
   P3  registry email domain, unique domain, legal-name match           -> exact
   P4  full legal-name match plus the registered postal code on page    -> exact
   R   another org number is shown, or the domain is shared by >1 org   -> related
-  A   anything else (parked page, partial name overlap, no anchor)     -> ambiguous
+  P   parked, for-sale or unconfigured placeholder                     -> placeholder (no site exists)
+  A   anything else (partial name overlap, no anchor)                  -> ambiguous
 
 Only `exact` is publishable. A name match on its own never publishes: a
 wrong-company publication blocks an official run, so when in doubt we abstain.
@@ -149,7 +150,7 @@ def assess_site(
     blob = f"{title} {structured} {text}"
 
     if any(marker in _fold(blob) for marker in PARKED_MARKERS):
-        return _result("ambiguous", None, ["page is a parked or for-sale placeholder"], [])
+        return _result("placeholder", None, ["page is a parked, for-sale or unconfigured placeholder: no company site yet"], [])
 
     shared = multiplicity.get(host, 1) > 1
     unverified = source.startswith("unchecked_")  # no multiplicity table: uniqueness is unknown
