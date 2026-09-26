@@ -131,9 +131,7 @@ def test_redirect_to_a_host_whose_robots_disallows_is_blocked():
     entity = {**ENTITY, "website": "sandneselektriske.no"}
     bundle = site({
         "https://sandneselektriske.no/": (301, "https://other-host.no/"),
-        "https://other-host.no/robots.txt": (200, "User-agent: *
-Disallow: /
-"),
+        "https://other-host.no/robots.txt": (200, "User-agent: *\nDisallow: /\n"),
     })
     result, _, seen = run(entity, client_bundle=bundle)
     assert result["status"] == "blocked"
@@ -149,3 +147,31 @@ def test_site_that_redirects_to_another_domain_is_gated_on_the_final_host():
     entity = {**ENTITY, "website": "sandneselektriske.no"}
     result, _, _ = run(entity, client_bundle=bundle, multiplicity={"sandneselektriske.no": 1, "parent-holding.no": 12})
     assert result["status"] == "ambiguous"  # the final host is shared by 12 entities
+
+
+def test_internal_link_that_redirects_off_site_is_discarded():
+    bundle = site({
+        f"{HOST}/nyheter": (301, "https://elsewhere.com/nyheter"),
+        "https://elsewhere.com/robots.txt": (200, "User-agent: *\nDisallow:\n"),
+        "https://elsewhere.com/nyheter": (200, "<html><title>Someone else</title><a href='mailto:x@elsewhere.com'>m</a></html>"),
+    })
+    result, _, _ = run(client_bundle=bundle)
+    assert "news" not in {p["kind"] for p in result["pages"]}
+    assert "x@elsewhere.com" not in result["emails"]
+
+
+def test_without_a_multiplicity_table_a_registry_site_is_not_verified_by_name_alone():
+    client, robots, _ = site()
+    result = research_website(ENTITY, client, robots, None)
+    assert result["status"] == "ambiguous"
+    assert result["candidates"][0]["source"] == "unchecked_registry_website"
+    assert result["socials"] == [] and result["pages"] == []
+
+
+def test_without_a_multiplicity_table_a_structured_org_number_still_verifies():
+    home = ('<html><title>X</title><script type="application/ld+json">'
+            '{"@type":"Organization","name":"X","vatID":"NO 810 034 882 MVA"}</script></html>')
+    client, robots, _ = site({f"{HOST}/": (200, home)})
+    result = research_website(ENTITY, client, robots, None)
+    assert result["status"] == "available"
+    assert result["proof"]["tier"] == "P1"

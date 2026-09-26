@@ -183,3 +183,29 @@ def test_org_number_declared_in_structured_identity_on_a_shared_domain_is_exact(
     )
     assert result["status"] == "exact"
     assert result["tier"] == "P1"
+
+
+# ---- unchecked domains (no multiplicity table available) -----------------------
+
+
+def test_unchecked_source_cannot_reach_p2_p3_or_p4():
+    for source in ("unchecked_registry_website", "unchecked_email_domain"):
+        result = assess_site(
+            ENTITY,
+            page(title="Sandnes Elektriske", text="Strandgata 21, 4307 Sandnes"),
+            source,
+            {},
+        )
+        assert result["status"] == "ambiguous", source
+
+
+def test_unchecked_source_ignores_org_number_in_body_text():
+    result = assess_site(ENTITY, page(text="Org.nr 810 034 882"), "unchecked_email_domain", {})
+    assert result["status"] != "exact"
+
+
+def test_unchecked_source_still_accepts_the_sites_own_structured_declaration():
+    result = assess_site(
+        ENTITY, {**page(), "identity_text": "NO 810 034 882 MVA"}, "unchecked_registry_website", {}
+    )
+    assert result["status"] == "exact" and result["tier"] == "P1"

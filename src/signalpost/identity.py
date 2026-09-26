@@ -136,6 +136,7 @@ def assess_site(
         return _result("ambiguous", None, ["page is a parked or for-sale placeholder"], [])
 
     shared = multiplicity.get(host, 1) > 1
+    unverified = source.startswith("unchecked_")  # no multiplicity table: uniqueness is unknown
 
     # P1: our exact org number. Declared in structured identity (JSON-LD vatID) it proves the
     # site is this entity even on a shared domain; in body text alone it only counts when the
@@ -146,7 +147,7 @@ def assess_site(
         return _result("exact", "P1", ["organisation number declared in the site's structured identity"], [],
                        _context(declared, hit.start(), hit.end()))
     hit = _find_org_number(blob, org)
-    if hit and not shared:
+    if hit and not shared and not unverified:
         return _result("exact", "P1", ["organisation number appears on the page"], [],
                        _context(blob, hit.start(), hit.end()))
 
@@ -164,6 +165,9 @@ def assess_site(
             "related", None,
             [f"domain {host} is shared by {multiplicity[host]} registry entities"], [],
         )
+
+    if unverified:
+        return _result("ambiguous", None, ["domain uniqueness could not be checked (no multiplicity table)"], [])
 
     core = name_tokens(entity.get("name"))
     identity_tokens = set(name_tokens(f"{title} {structured}"))
