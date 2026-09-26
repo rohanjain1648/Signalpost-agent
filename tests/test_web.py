@@ -96,7 +96,7 @@ def test_max_pages_limits_the_fan_out():
 
 def test_no_candidate_domain_is_not_available_and_makes_no_requests():
     entity = {**ENTITY, "website": None, "email": "kari@gmail.com"}
-    result, client, _ = run(entity)
+    result, client, _ = run(entity, discover=False)  # discovery has its own tests below
     assert result["status"] == "not_available"
     assert client.requests_made == 0
     assert result["candidates"] == []
@@ -281,3 +281,91 @@ def test_a_timeout_is_still_failed_because_it_may_be_transient():
                    f"{HOST}/robots.txt": ("timeout", ""), f"{HOST}/": ("timeout", "")})
     result, _, _ = run(EMAIL_ONLY, client_bundle=bundle)
     assert result["status"] == "failed"
+
+
+# ---- discovery: name-derived domains ---------------------------------------------
+
+NO_CANDIDATE = {**ENTITY, "website": None, "email": None}
+GUESS = "https://sandneselektriske.no"
+
+
+def guess_site(home, unresolvable=(), extra=None):
+    routes = {f"{GUESS}/": (200, home)}
+    routes.update(extra or {})
+    return site(routes, unresolvable=set(unresolvable) | {"sandnes-elektriske.no"})
+
+
+def test_a_guessed_domain_is_verified_when_the_page_shows_the_organisation_number():
+    home = "<html><title>Firma</title><body>Org.nr 810 034 882 MVA. Vi er elektrikere.</body></html>"
+    result, client_, seen = run(NO_CANDIDATE, client_bundle=guess_site(home))
+    assert result["status"] == "available"
+    assert result["proof"]["tier"] == "P1"
+    assert result["candidates"][0]["source"] == "name_guess"
+
+
+def test_a_guessed_domain_is_verified_by_full_name_plus_registered_postal_code():
+    home = "<html><title>Sandnes Elektriske</title><body>Strandgata 21, 4307 Sandnes</body></html>"
+    result, _, _ = run(NO_CANDIDATE, client_bundle=guess_site(home))
+    assert result["status"] == "available"
+    assert result["proof"]["tier"] == "P4"
+
+
+def test_a_guessed_domain_is_never_verified_by_a_matching_name_alone():
+    home = "<html><title>Sandnes Elektriske</title><body>Velkommen til vår elektrikerbedrift.</body></html>"
+    result, _, _ = run(NO_CANDIDATE, client_bundle=guess_site(home))
+    assert result["status"] == "ambiguous"
+    assert result["socials"] == [] and result["pages"] == []
+
+
+def test_guesses_that_do_not_resolve_cost_no_http_requests():
+    bundle = site(unresolvable={"sandneselektriske.no", "sandnes-elektriske.no"})
+    result, client_, seen = run(NO_CANDIDATE, client_bundle=bundle)
+    assert result["status"] == "not_available"
+    assert client_.requests_made == 0 and seen == []
+    assert [g["resolved"] for g in result["guesses"]] == [False, False]
+
+
+def test_discovery_can_be_switched_off():
+    bundle = site()
+    result, client_, _ = run(NO_CANDIDATE, client_bundle=bundle, discover=False)
+    assert result["guesses"] == []
+    assert client_.dns_lookups == 0
+
+
+def test_guessing_is_skipped_when_a_registry_candidate_already_produced_a_page():
+    result, _, seen = run(client_bundle=site())  # registry website verifies (P2)
+    assert result["status"] == "available"
+    assert result["guesses"] == []
+
+
+def test_guessing_is_tried_when_the_registry_candidate_is_a_dead_domain():
+    entity = {**ENTITY, "website": None, "email": "x@dead-mail-domain.no"}
+    home = "<html><title>Firma</title><body>Org.nr 810 034 882</body></html>"
+    bundle = site({f"{GUESS}/": (200, home)},
+                  unresolvable={"dead-mail-domain.no", "www.dead-mail-domain.no", "sandnes-elektriske.no"})
+    result, _, _ = run(entity, client_bundle=bundle)
+    assert result["status"] == "available"
+    assert [c["source"] for c in result["candidates"]] == ["email_domain", "name_guess"]
+
+
+def test_a_guess_on_a_shared_domain_is_related_and_never_published():
+    home = "<html><title>Sandnes Elektriske</title><body>Org.nr 810 034 882</body></html>"
+    result, _, _ = run(NO_CANDIDATE, client_bundle=guess_site(home), multiplicity={"sandneselektriske.no": 9})
+    assert result["status"] == "ambiguous"
+    assert result["candidates"][0]["outcome"] == "related"
+
+
+def test_discovery_never_probes_a_domain_that_was_already_tried_or_blocked():
+    bundle = site(robots="User-agent: *\nDisallow: /\n")
+    result, client_, seen = run(client_bundle=bundle)  # registry site is www.sandneselektriske.no
+    assert result["status"] == "blocked"
+    assert result["guesses"] == []  # a robots block is respected, not worked around
+    assert not any(u.startswith("https://sandneselektriske.no") for u in seen)
+
+
+def test_a_guess_equal_to_an_already_tried_registry_domain_is_skipped():
+    entity = {**ENTITY, "website": None, "email": "post@sandneselektriske.no"}  # tried as email_domain
+    bundle = site({"https://sandneselektriske.no/": (404, "")}, unresolvable={"sandnes-elektriske.no"})
+    result, _, seen = run(entity, client_bundle=bundle)
+    assert [g["domain"] for g in result["guesses"]] == ["sandnes-elektriske.no"]
+    assert seen.count("https://sandneselektriske.no/") == 1

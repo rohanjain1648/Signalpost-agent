@@ -121,12 +121,25 @@ class CountingClient:
         )
         self.max_requests = max_requests
         self.requests_made = 0
-        self._resolver = resolver
+        self._raw_resolver = resolver
+        self.dns_lookups = 0
         self._throttles = throttles or {}
         self._clock = clock
         self._sleeper = sleeper
         self._throttle_lock = threading.Lock()
         self._last_request_at: dict[str, float] = {}
+
+    def _resolver(self, host: str) -> list[str]:
+        self.dns_lookups += 1
+        return self._raw_resolver(host)
+
+    def resolves(self, host: str) -> bool:
+        """True if `host` resolves to public addresses only. A DNS lookup, not an HTTP request."""
+        try:
+            addresses = self._resolver(host)
+            return bool(addresses) and all(ipaddress.ip_address(a).is_global for a in addresses)
+        except (OSError, ValueError):
+            return False
 
     def _wait_for_slot(self, url: str) -> None:
         """Space out requests to rate-limited endpoints (minimum seconds between starts)."""

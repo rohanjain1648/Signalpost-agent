@@ -11,7 +11,7 @@ import urllib.parse
 from typing import Any
 
 from .extract import ATS_HOSTS, extract_page
-from .identity import FREEMAIL_DOMAINS, assess_site, candidate_domains, social_matches_entity
+from .identity import FREEMAIL_DOMAINS, assess_site, candidate_domains, guess_domains, social_matches_entity
 from .net import CountingClient, FetchResult
 from .robots import RobotsCache
 
@@ -106,7 +106,7 @@ def _empty(status: str, candidates: list[dict[str, Any]]) -> dict[str, Any]:
         "status": status, "candidates": candidates, "proof": None, "homepage": None, "pages": [],
         "socials": [], "emails": [], "phones": [], "jobs": [], "careers_links": [], "news_links": [],
         "structured_organizations": [], "contact_sources": {}, "careers_checked": False,
-        "quarantined_socials": [],
+        "quarantined_socials": [], "guesses": [],
     }
 
 
@@ -172,10 +172,18 @@ def research_website(
     multiplicity: dict[str, int] | None,
     *,
     max_pages: int = 4,
+    discover: bool = True,
 ) -> dict[str, Any]:
-    """`multiplicity=None` means no table is available: domains are then treated as unchecked."""
+    """`multiplicity=None` means no table is available: domains are then treated as unchecked.
+
+    `discover` adds name-derived domain guesses when no registry candidate yielded a page. A guess
+    (source `name_guess`) can only be verified by the organisation number or name + postal code.
+    """
     candidates: list[dict[str, Any]] = []
-    for candidate in _candidate_urls(entity):
+    guesses: list[dict[str, Any]] = []
+
+    def evaluate(candidate: dict[str, str]) -> dict[str, Any] | None:
+        """Fetch and judge one candidate. Returns the finished result if it is verified, else None."""
         if multiplicity is None:
             candidate = {**candidate, "source": "unchecked_" + candidate["source"]}
         for attempt in _attempt_urls(candidate["url"]):
@@ -191,7 +199,7 @@ def research_website(
         if failure:
             record["outcome"], record["reason"] = failure
             candidates.append(record)
-            continue
+            return None
         extraction = extract_page(fetch.text or "", fetch.final_url or candidate["url"])
         page = {
             "final_url": fetch.final_url, "title": extraction["title"], "text": extraction["text"],
@@ -201,19 +209,40 @@ def research_website(
         outcome = "not_available" if assessment["status"] == "placeholder" else assessment["status"]
         record["outcome"], record["reason"] = outcome, "; ".join(assessment["reasons"])
         candidates.append(record)
-        if assessment["status"] == "exact":
-            result = _empty("available", candidates)
-            result["proof"] = assessment
-            result["homepage"] = {
-                **_evidence(fetch), "title": extraction["title"], "description": extraction["description"],
-                "site_name": extraction["site_name"],
-            }
-            _fan_out(fetch, extraction, client, robots, max_pages, result)
-            _gate_socials(entity, result)
-            return result
+        if assessment["status"] != "exact":
+            return None
+        result = _empty("available", candidates)
+        result["guesses"] = guesses
+        result["proof"] = assessment
+        result["homepage"] = {
+            **_evidence(fetch), "title": extraction["title"], "description": extraction["description"],
+            "site_name": extraction["site_name"],
+        }
+        _fan_out(fetch, extraction, client, robots, max_pages, result)
+        _gate_socials(entity, result)
+        return result
+
+    for candidate in _candidate_urls(entity):
+        verified = evaluate(candidate)
+        if verified:
+            return verified
+
+    page_seen = any(c["outcome"] in {"related", "ambiguous", "exact", "blocked"} for c in candidates)
+    if discover and not page_seen:
+        tried = {c["domain"] for c in candidates}
+        for domain in guess_domains(entity):
+            if domain in tried:
+                continue
+            resolved = client.resolves(domain)
+            guesses.append({"domain": domain, "resolved": resolved})
+            if not resolved:
+                continue
+            verified = evaluate({"domain": domain, "source": "name_guess", "url": f"https://{domain}/"})
+            if verified:
+                return verified
 
     outcomes = {c["outcome"] for c in candidates}
     for status, matches in (("ambiguous", {"related", "ambiguous"}), ("blocked", {"blocked"}), ("failed", {"failed"})):
         if outcomes & matches:
-            return _empty(status, candidates)
-    return _empty("not_available", candidates)
+            return {**_empty(status, candidates), "guesses": guesses}
+    return {**_empty("not_available", candidates), "guesses": guesses}

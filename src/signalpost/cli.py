@@ -46,6 +46,8 @@ def main(argv: Sequence[str] | None = None, *, client_factory: ClientFactory | N
     parser.add_argument("--domain-table", default=DEFAULT_DOMAIN_TABLE,
                         help="shared-domain table built from the BRREG bulk file (see scripts/build_domain_table.py)")
     parser.add_argument("--no-web", action="store_true", help="skip website research (official data only)")
+    parser.add_argument("--no-discovery", action="store_true",
+                        help="do not guess name-derived domains for companies without a registry candidate")
     args = parser.parse_args(argv)
 
     started = time.monotonic()
@@ -59,7 +61,7 @@ def main(argv: Sequence[str] | None = None, *, client_factory: ClientFactory | N
         print(f"warning: domain table {args.domain_table!r} not found; website candidates are treated as "
               "unchecked and only a site's own structured organisation-number declaration can verify one",
               file=sys.stderr)
-    web = None if args.no_web else WebResearch(robots=RobotsCache(client), multiplicity=table)
+    web = None if args.no_web else WebResearch(robots=RobotsCache(client), multiplicity=table, discover=not args.no_discovery)
 
     def worker(org: str) -> Envelope:
         prev = load_state(args.state_dir, org)
@@ -92,6 +94,8 @@ def main(argv: Sequence[str] | None = None, *, client_factory: ClientFactory | N
         "requests": client.requests_made,
         "max_requests": args.max_requests,
         "web_enabled": web is not None,
+        "discovery_enabled": web is not None and web.discover,
+        "dns_lookups": client.dns_lookups,
         "domain_table_loaded": table is not None,
         "domain_table_shared_domains": None if table is None else len(table),
         "runtime_ms": int((time.monotonic() - started) * 1000),

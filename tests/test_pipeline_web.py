@@ -175,6 +175,7 @@ def test_entity_without_any_website_candidate_is_not_available_citing_the_regist
         return original(request)
 
     client._client._transport.handler = patched
+    bundle[1].discover = False  # no guessing: this test is about the registry-only path
     envelope, _ = run(bundle)
     site = by_field(envelope)["official_website"]
     assert site.availability == "not_available"

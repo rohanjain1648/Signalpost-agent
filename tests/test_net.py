@@ -228,3 +228,26 @@ def test_requests_made_by_the_allow_hook_itself_are_counted_and_budgeted():
 
     with pytest.raises(BudgetExceeded):
         client.fetch_page("https://a.no/", allow=allow)
+
+
+# ---- DNS helper ------------------------------------------------------------------
+
+
+def test_resolves_uses_the_resolver_costs_no_http_request_and_counts_lookups():
+    def resolver(host):
+        if host == "dead.no":
+            import socket
+            raise socket.gaierror("no such host")
+        return ["8.8.8.8"]
+
+    client = CountingClient(transport=httpx.MockTransport(lambda r: httpx.Response(200)), resolver=resolver)
+    assert client.resolves("alive.no") is True
+    assert client.resolves("dead.no") is False
+    assert client.requests_made == 0
+    assert client.dns_lookups == 2
+
+
+def test_private_addresses_do_not_count_as_resolving_candidates():
+    client = CountingClient(transport=httpx.MockTransport(lambda r: httpx.Response(200)),
+                            resolver=lambda host: ["10.0.0.1"])
+    assert client.resolves("intranet.no") is False

@@ -47,6 +47,7 @@ class WebResearch:
     robots: RobotsCache
     multiplicity: dict[str, int] | None
     max_pages: int = 4
+    discover: bool = True
 
 
 def _utc_now() -> str:
@@ -249,7 +250,8 @@ def process_company(
         if entity["status"] == "available":
             try:
                 site = build_site_output(research_website(
-                    entity["value"], client, web.robots, web.multiplicity, max_pages=web.max_pages))
+                    entity["value"], client, web.robots, web.multiplicity, max_pages=web.max_pages,
+                    discover=web.discover))
             except Exception as exc:  # noqa: BLE001 - a website crash must never discard the official data
                 message = f"{type(exc).__name__}: {exc}"
                 errors.append({"module": "website", "type": "exception", "message": message})

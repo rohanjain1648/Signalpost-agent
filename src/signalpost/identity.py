@@ -264,3 +264,31 @@ def social_matches_entity(
             candidates.add("".join(tokens))
         candidates.update(t for t in tokens if len(t) >= 6 and t not in GENERIC_NAME_WORDS)
     return any(len(c) >= 4 and (c in handle or (len(handle) >= 5 and handle in c)) for c in candidates)
+
+
+# ---- name-derived domain guesses ------------------------------------------------
+
+NO_SITE_FORMS = {"BRL", "ESEK", "BBL", "SAM", "STI", "SF", "FLI", "VPFO"}  # co-ops, condominiums, foundations
+MAX_GUESSES = 3
+
+
+def guess_domains(entity: dict[str, Any]) -> list[str]:
+    """Plausible `.no` domains for an entity with no registry website or company-domain email.
+
+    Guesses are only *candidates*: a guessed site is published only if it proves the exact
+    entity with the organisation number (P1) or full name plus registered postal code (P4).
+    """
+    if str(entity.get("legal_form") or "").upper() in NO_SITE_FORMS:
+        return []
+    if str(entity.get("industry_code") or "")[:2] in {"64", "68"} and not entity.get("employees"):
+        return []  # holding and property shells rarely have their own site
+    name = entity.get("name")
+    if re.search(r"\d", str(name or "")):
+        return []  # numbered shells ("TOBB OVERVIK 2 UTBYGGING")
+    tokens = name_tokens(name)
+    if not tokens or len(tokens) > 3 or all(t in GENERIC_NAME_WORDS for t in tokens):
+        return []
+    labels = ["".join(tokens)]
+    if len(tokens) > 1:
+        labels.append("-".join(tokens))
+    return [f"{label}.no" for label in dict.fromkeys(labels) if 5 <= len(label) <= 40][:MAX_GUESSES]

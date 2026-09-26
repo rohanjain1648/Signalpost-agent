@@ -304,3 +304,42 @@ def test_numeric_or_opaque_handles_are_not_relevant_unless_declared_in_json_ld()
     assert not social_matches_entity(entity, None, "x", social("facebook", "https://www.facebook.com/pages/Firma/12345"))
     assert not social_matches_entity(entity, None, "x", social("youtube", "https://www.youtube.com/channel/UCabc123"))
     assert social_matches_entity(entity, None, "x", social("youtube", "https://www.youtube.com/channel/UCabc123", "json_ld"))
+
+
+# ---- name-derived domain guesses -------------------------------------------------
+
+from signalpost.identity import guess_domains  # noqa: E402
+
+
+def guess_entity(name, form="AS", industry="62.010", employees=5):
+    return {"name": name, "legal_form": form, "industry_code": industry, "employees": employees}
+
+
+def test_guesses_join_distinctive_name_tokens_under_no():
+    assert guess_domains(guess_entity("VESETH AS")) == ["veseth.no"]
+    assert guess_domains(guess_entity("SANDNES ELEKTRISKE AS")) == ["sandneselektriske.no", "sandnes-elektriske.no"]
+
+
+def test_norwegian_letters_are_folded_in_guesses():
+    assert guess_domains(guess_entity("BJØRKÅS RØRLEGGER AS"))[0] == "bjorkasrorlegger.no"
+
+
+def test_guesses_are_capped_and_names_with_too_many_tokens_are_skipped():
+    assert len(guess_domains(guess_entity("A B C D E F AS"))) == 0
+    assert len(guess_domains(guess_entity("ALFA BETA GAMMA AS"))) <= 3
+
+
+def test_entities_that_never_have_websites_get_no_guesses():
+    assert guess_domains(guess_entity("DYRGRAV BORETTSLAG", form="BRL")) == []
+    assert guess_domains(guess_entity("SAMEIET STORGATA 4", form="ESEK")) == []
+    assert guess_domains(guess_entity("NORD HOLDING AS", industry="64.200", employees=None)) == []
+    assert guess_domains(guess_entity("STORGATA UTLEIE AS", industry="68.200", employees=0)) == []
+
+
+def test_names_of_only_generic_words_or_numbers_get_no_guesses():
+    assert guess_domains(guess_entity("EIENDOM INVEST HOLDING AS")) == []
+    assert guess_domains(guess_entity("SØNDRE KULLERØD 1 AS")) == []
+
+
+def test_short_or_meaningless_guesses_are_dropped():
+    assert guess_domains(guess_entity("XY AS")) == []

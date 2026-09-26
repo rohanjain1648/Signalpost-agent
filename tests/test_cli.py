@@ -160,3 +160,17 @@ def test_default_domain_table_path_is_absolute_and_ships_in_the_repo():
 
     assert Path(DEFAULT_DOMAIN_TABLE).is_absolute()
     assert Path(DEFAULT_DOMAIN_TABLE).exists()
+
+
+def test_report_records_discovery_state_and_dns_lookups(tmp_path):
+    _, out = run_cli(tmp_path, [GOOD], extra=("--domain-table", str(tmp_path / "missing.json.gz")))
+    report = json.loads(Path(str(out) + ".report.json").read_text(encoding="utf-8"))
+    assert report["discovery_enabled"] is True
+    assert report["dns_lookups"] >= 1
+
+
+def test_no_discovery_flag_is_reported_and_still_researches_registry_candidates(tmp_path):
+    _, out = run_cli(tmp_path, [GOOD], extra=("--no-discovery", "--domain-table", str(tmp_path / "missing.json.gz")))
+    report = json.loads(Path(str(out) + ".report.json").read_text(encoding="utf-8"))
+    assert report["discovery_enabled"] is False
+    assert "official_website" in _claims(out)
