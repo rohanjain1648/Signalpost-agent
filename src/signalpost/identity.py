@@ -96,15 +96,22 @@ def build_domain_multiplicity(rows: Iterable[dict[str, Any]]) -> dict[str, int]:
     return {domain: len(orgs) for domain, orgs in owners.items()}
 
 
-def _result(status: str, tier: str | None, reasons: list[str], matched: list[str]) -> dict[str, Any]:
+def _result(
+    status: str, tier: str | None, reasons: list[str], matched: list[str], span: str | None = None
+) -> dict[str, Any]:
     return {
         "status": status,
         "tier": tier,
         "publishable": status == "exact",
         "reasons": reasons,
         "matched_tokens": matched,
+        "span": span,
         "method": "tiered_identity_v1",
     }
+
+
+def _context(text: str, start: int, end: int, radius: int = 40) -> str:
+    return " ".join(text[max(0, start - radius): end + radius].split())
 
 
 def assess_site(
@@ -123,7 +130,8 @@ def assess_site(
     # P1: our exact org number, as a standalone 9-digit run (optionally spaced 3-3-3)
     for m in re.finditer(r"(?<!\d)(\d{3}\s?\d{3}\s?\d{3})(?!\d)", blob):
         if re.sub(r"\D", "", m.group(1)) == org:
-            return _result("exact", "P1", ["organisation number appears on the page"], [])
+            return _result("exact", "P1", ["organisation number appears on the page"], [],
+                           _context(blob, m.start(), m.end()))
 
     # R: the page names a different organisation number
     others = {re.sub(r"\D", "", m.group(1)) for m in _ORG_LABELLED.finditer(blob)} - {org}
@@ -153,12 +161,16 @@ def assess_site(
     name_in_page = bool(core) and (set(core) <= full_tokens or host_spells_name)
 
     if source == "registry_website" and name_in_identity:
-        return _result("exact", "P2", ["registry website, unique domain, legal name matches"], matched)
+        return _result("exact", "P2", ["registry website, unique domain, legal name matches"], matched,
+                       title or structured or host)
     if source == "email_domain" and name_in_identity:
-        return _result("exact", "P3", ["registry email domain, unique domain, legal name matches"], matched)
+        return _result("exact", "P3", ["registry email domain, unique domain, legal name matches"], matched,
+                       title or structured or host)
 
     postal = str(entity.get("postal_code") or "")
-    if name_in_page and postal and re.search(rf"(?<!\d){re.escape(postal)}(?!\d)", text):
-        return _result("exact", "P4", ["full legal name and registered postal code both appear"], matched)
+    postal_hit = re.search(rf"(?<!\d){re.escape(postal)}(?!\d)", text) if postal else None
+    if name_in_page and postal_hit:
+        return _result("exact", "P4", ["full legal name and registered postal code both appear"], matched,
+                       _context(text, postal_hit.start(), postal_hit.end()))
 
     return _result("ambiguous", None, ["no exact-entity anchor found"], matched)

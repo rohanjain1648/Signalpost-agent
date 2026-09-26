@@ -59,6 +59,7 @@ def normalize_entity(body: Any) -> dict[str, Any]:
         "industry_label": _get(body, "naeringskode1", "beskrivelse"),
         "purpose": body.get("vedtektsfestetFormaal"),
         "municipality": _get(body, "forretningsadresse", "kommune"),
+        "postal_code": _get(body, "forretningsadresse", "postnummer"),
         "business_address": body.get("forretningsadresse"),
         "postal_address": body.get("postadresse"),
         "historical_names": body.get("historiskeNavn") or [],

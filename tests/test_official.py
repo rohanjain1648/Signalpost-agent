@@ -28,6 +28,7 @@ def test_normalize_entity_maps_key_registry_fields():
     assert entity["email"] == "post@sandneselektriske.no"
     assert entity["municipality"] == "SANDNES"
     assert entity["industry_code"] == "43.210"
+    assert entity["postal_code"] == "4307"
 
 
 def test_normalize_entity_handles_missing_optional_fields():

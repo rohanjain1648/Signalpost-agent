@@ -143,3 +143,23 @@ def test_domain_spelling_the_legal_name_counts_when_page_has_no_title():
     result = assess_site(ENTITY, page(title="", text=""), "registry_website", {"sandneselektriske.no": 1})
     assert result["status"] == "exact"
     assert result["tier"] == "P2"
+
+
+def test_exact_results_carry_a_quotable_evidence_span():
+    p1 = assess_site(ENTITY, page(text="Kontakt oss. Org.nr 810 034 882 MVA. Velkommen"), "email_domain", {})
+    assert "810 034 882" in p1["span"]
+
+    p2 = assess_site(ENTITY, page(title="Sandnes Elektriske - elektriker"), "registry_website", {"sandneselektriske.no": 1})
+    assert "Sandnes Elektriske" in p2["span"]
+
+    p4 = assess_site(
+        ENTITY,
+        page(title="Sandnes Elektriske", text="Strandgata 21, 4307 Sandnes", final_url="https://other.no/"),
+        "search", {"other.no": 1},
+    )
+    assert "4307" in p4["span"]
+
+
+def test_non_exact_results_have_no_span():
+    result = assess_site(ENTITY, page(title="Sandnes Bakeri"), "registry_website", {})
+    assert result["span"] is None
