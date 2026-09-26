@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import json
+import re
 import socket
 import threading
 import time
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -67,14 +69,38 @@ class FetchResult:
     content_sha256: str | None = None
     retrieved_at: str | None = None
     final_url: str | None = None
+    text: str | None = None
+    content_type: str | None = None
+    redirect_chain: list[str] = field(default_factory=list)
+    truncated: bool = False
 
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _decode(raw: bytes, content_type: str) -> str:
+    """Decode a body: declared charset, then <meta charset>, then UTF-8, then cp1252."""
+    match = re.search(r"charset=([\w-]+)", content_type or "", re.I)
+    codec = match.group(1) if match else None
+    if codec is None:
+        meta = re.search(rb"<meta[^>]+charset=[\"']?([\w-]+)", raw[:4096], re.I)
+        codec = meta.group(1).decode("ascii") if meta else None
+    for candidate in (codec, "utf-8"):
+        if not candidate:
+            continue
+        try:
+            return raw.decode(candidate)
+        except (LookupError, UnicodeDecodeError):
+            continue
+    return raw.decode("cp1252", errors="replace")
+
+
 class CountingClient:
-    """Wraps an httpx client, enforcing a public-URL policy and a hard request budget."""
+    """Wraps an httpx client, enforcing a public-URL policy and a hard request budget.
+
+    Redirects are followed manually so every hop is budget-counted and SSRF-checked.
+    """
 
     def __init__(
         self,
@@ -90,8 +116,8 @@ class CountingClient:
         self._client = httpx.Client(
             transport=transport,
             timeout=timeout,
-            headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
-            follow_redirects=True,
+            headers={"User-Agent": USER_AGENT},
+            follow_redirects=False,
         )
         self.max_requests = max_requests
         self.requests_made = 0
@@ -115,49 +141,68 @@ class CountingClient:
                     now = self._clock()
                 self._last_request_at[prefix] = now
 
-    def fetch_json(self, url: str) -> FetchResult:
-        if self.requests_made >= self.max_requests:
-            raise BudgetExceeded(
-                f"Request budget of {self.max_requests} exhausted before fetching {url!r}"
-            )
-        assert_public_url(url, resolver=self._resolver)
-        self._wait_for_slot(url)
-        self.requests_made += 1
+    def _get(self, url: str, *, accept: str, max_redirects: int, max_bytes: int) -> FetchResult:
         started = time.monotonic()
-        try:
-            response = self._client.get(url)
-        except httpx.HTTPError as exc:
-            elapsed = int((time.monotonic() - started) * 1000)
+        chain: list[str] = []
+        current = url
+
+        def result(status: int = 0, error: str | None = None, raw: bytes = b"", content_type: str | None = None,
+                   truncated: bool = False) -> FetchResult:
             return FetchResult(
-                url=url,
-                status=0,
-                elapsed_ms=elapsed,
-                bytes_received=0,
-                error=type(exc).__name__,
-                retrieved_at=_utc_now(),
+                url=url, status=status, elapsed_ms=int((time.monotonic() - started) * 1000),
+                bytes_received=len(raw), error=error,
+                content_sha256=hashlib.sha256(raw).hexdigest() if raw else None,
+                retrieved_at=_utc_now(), final_url=chain[-1] if chain else url,
+                content_type=content_type, redirect_chain=chain, truncated=truncated,
             )
-        elapsed = int((time.monotonic() - started) * 1000)
-        raw = response.content
-        body = None
-        error = None
-        if response.status_code == 200:
+
+        for _ in range(max_redirects + 1):
+            if self.requests_made >= self.max_requests:
+                raise BudgetExceeded(f"Request budget of {self.max_requests} exhausted before fetching {current!r}")
             try:
-                body = response.json()
+                assert_public_url(current, resolver=self._resolver)
+            except ValueError as exc:
+                return result(error=f"blocked: {exc}")
+            self._wait_for_slot(current)
+            self.requests_made += 1
+            chain.append(current)
+            try:
+                with self._client.stream("GET", current, headers={"Accept": accept}) as response:
+                    raw = bytearray()
+                    truncated = False
+                    for piece in response.iter_bytes():
+                        raw.extend(piece)
+                        if len(raw) > max_bytes:
+                            del raw[max_bytes:]
+                            truncated = True
+                            break
+                    status = response.status_code
+                    location = response.headers.get("location")
+                    content_type = response.headers.get("content-type", "")
+            except httpx.HTTPError as exc:
+                return result(error=type(exc).__name__)
+            if status in {301, 302, 303, 307, 308} and location:
+                current = urllib.parse.urljoin(current, location)
+                continue
+            found = result(status=status, raw=bytes(raw), content_type=content_type, truncated=truncated)
+            found.text = _decode(bytes(raw), content_type)
+            if status != 200:
+                found.error = f"HTTP {status}"
+            return found
+        return result(error="too many redirects")
+
+    def fetch_json(self, url: str) -> FetchResult:
+        found = self._get(url, accept="application/json", max_redirects=3, max_bytes=10_000_000)
+        if found.status == 200:
+            try:
+                found.body = json.loads(found.text or "")
             except ValueError:
-                error = "invalid_json"
-        else:
-            error = f"HTTP {response.status_code}"
-        return FetchResult(
-            url=url,
-            status=response.status_code,
-            elapsed_ms=elapsed,
-            bytes_received=len(raw),
-            body=body,
-            error=error,
-            content_sha256=hashlib.sha256(raw).hexdigest() if raw else None,
-            retrieved_at=_utc_now(),
-            final_url=str(response.url),
-        )
+                found.error = "invalid_json"
+        return found
+
+    def fetch_page(self, url: str, *, max_redirects: int = 5, max_bytes: int = 1_500_000) -> FetchResult:
+        return self._get(url, accept="text/html,application/xhtml+xml,*/*;q=0.8",
+                         max_redirects=max_redirects, max_bytes=max_bytes)
 
     def close(self) -> None:
         self._client.close()

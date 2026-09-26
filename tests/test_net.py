@@ -114,3 +114,87 @@ def test_unthrottled_endpoints_never_sleep():
     client.fetch_json("https://data.brreg.no/enhetsregisteret/api/enheter/1")
     client.fetch_json("https://data.brreg.no/enhetsregisteret/api/enheter/2")
     assert clock.sleeps == []
+
+
+# ---- redirects are counted, SSRF-checked, and bounded --------------------------
+
+
+def _redirecting_client(routes, resolver=None, max_requests=20):
+    def handler(request: httpx.Request) -> httpx.Response:
+        target = routes[str(request.url)]
+        if isinstance(target, int):
+            return httpx.Response(target, text="x")
+        if target.startswith("BODY:"):
+            return httpx.Response(200, text=target[5:], headers={"content-type": "text/html; charset=utf-8"})
+        return httpx.Response(301, headers={"location": target})
+
+    return CountingClient(
+        transport=httpx.MockTransport(handler),
+        max_requests=max_requests,
+        resolver=resolver or (lambda host: ["8.8.8.8"]),
+    )
+
+
+def test_each_redirect_hop_counts_against_the_request_budget():
+    client = _redirecting_client({
+        "http://a.no/": "https://a.no/",
+        "https://a.no/": "https://www.a.no/",
+        "https://www.a.no/": "BODY:<html>hi</html>",
+    })
+    result = client.fetch_page("http://a.no/")
+    assert result.status == 200
+    assert client.requests_made == 3
+    assert result.redirect_chain == ["http://a.no/", "https://a.no/", "https://www.a.no/"]
+    assert result.final_url == "https://www.a.no/"
+
+
+def test_redirect_to_private_address_is_blocked_not_followed():
+    def resolver(host):
+        return ["10.0.0.9"] if host == "intranet.a.no" else ["8.8.8.8"]
+
+    client = _redirecting_client({"https://a.no/": "https://intranet.a.no/"}, resolver=resolver)
+    result = client.fetch_page("https://a.no/")
+    assert result.status == 0
+    assert "blocked" in (result.error or "").lower()
+    assert client.requests_made == 1
+
+
+def test_redirect_loop_is_cut_off_after_max_redirects():
+    client = _redirecting_client({"https://a.no/": "https://a.no/"})
+    result = client.fetch_page("https://a.no/", max_redirects=3)
+    assert result.status == 0
+    assert "redirect" in (result.error or "").lower()
+    assert client.requests_made == 4
+
+
+def test_fetch_page_returns_decoded_text_and_content_type():
+    client = _redirecting_client({"https://a.no/": "BODY:<html><title>Blåbær</title></html>"})
+    result = client.fetch_page("https://a.no/")
+    assert "Blåbær" in result.text
+    assert result.content_type.startswith("text/html")
+    assert result.content_sha256
+
+
+def test_fetch_page_truncates_oversized_bodies():
+    client = _redirecting_client({"https://a.no/": "BODY:" + "x" * 5000})
+    result = client.fetch_page("https://a.no/", max_bytes=1000)
+    assert len(result.text) == 1000
+    assert result.truncated is True
+
+
+def test_budget_is_checked_before_following_a_redirect():
+    client = _redirecting_client(
+        {"https://a.no/": "https://b.no/", "https://b.no/": "BODY:ok"}, max_requests=1
+    )
+    with pytest.raises(BudgetExceeded):
+        client.fetch_page("https://a.no/")
+
+
+def test_decodes_latin1_pages_declared_via_meta_and_falls_back_for_undeclared_bytes():
+    from signalpost.net import _decode
+
+    latin1 = "<html><meta charset=iso-8859-1><title>Bjørkås Rørlegger</title></html>".encode("iso-8859-1")
+    assert "Bjørkås Rørlegger" in _decode(latin1, "text/html")
+    undeclared = "Blåbær".encode("cp1252")  # invalid UTF-8, no declaration anywhere
+    assert _decode(undeclared, "text/html") == "Blåbær"
+    assert _decode("Blåbær".encode("utf-8"), "text/html") == "Blåbær"
