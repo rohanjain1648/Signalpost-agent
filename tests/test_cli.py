@@ -153,3 +153,10 @@ def test_report_records_a_loaded_domain_table(tmp_path):
     report = json.loads(Path(str(out) + ".report.json").read_text(encoding="utf-8"))
     assert report["domain_table_loaded"] is True
     assert report["domain_table_shared_domains"] == 1
+
+
+def test_default_domain_table_path_is_absolute_and_ships_in_the_repo():
+    from signalpost.cli import DEFAULT_DOMAIN_TABLE
+
+    assert Path(DEFAULT_DOMAIN_TABLE).is_absolute()
+    assert Path(DEFAULT_DOMAIN_TABLE).exists()

@@ -27,7 +27,7 @@ from .robots import RobotsCache
 from .store import load_state, save_state
 
 DEFAULT_MAX_REQUESTS = 1900  # evaluator hard cap is 2,000 including redirects and retries
-DEFAULT_DOMAIN_TABLE = "data/domain_multiplicity.json.gz"
+DEFAULT_DOMAIN_TABLE = str(Path(__file__).resolve().parents[2] / "data" / "domain_multiplicity.json.gz")
 
 ClientFactory = Callable[[int], CountingClient]
 

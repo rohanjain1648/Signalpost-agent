@@ -209,3 +209,17 @@ def test_unchecked_source_still_accepts_the_sites_own_structured_declaration():
         ENTITY, {**page(), "identity_text": "NO 810 034 882 MVA"}, "unchecked_registry_website", {}
     )
     assert result["status"] == "exact" and result["tier"] == "P1"
+
+
+# ---- platform hosts are profiles, never company sites --------------------------
+
+
+def test_social_and_platform_hosts_are_never_website_candidates():
+    for site in ("https://www.facebook.com/sandneselektriske", "instagram.com/x", "linkedin.com/company/x",
+                 "www.youtube.com/@x", "x.com/x", "linktr.ee/x"):
+        assert candidate_domains({**ENTITY, "website": site, "email": None}) == [], site
+
+
+def test_a_platform_host_does_not_hide_a_real_email_domain_candidate():
+    entity = {**ENTITY, "website": "https://www.facebook.com/x", "email": "post@sandneselektriske.no"}
+    assert candidate_domains(entity) == [("sandneselektriske.no", "email_domain")]

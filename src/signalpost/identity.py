@@ -31,6 +31,14 @@ FREEMAIL_DOMAINS = {
     "start.no", "hotmail.co.uk", "proton.me", "protonmail.com", "gmx.com", "tele2.no",
 }
 
+# Hosts that carry many organisations' pages: a registry "website" here is a profile, not a company site.
+PLATFORM_DOMAINS = {
+    "facebook.com", "fb.com", "instagram.com", "linkedin.com", "twitter.com", "x.com", "youtube.com",
+    "youtu.be", "tiktok.com", "linktr.ee", "google.com", "goo.gl", "wixsite.com", "business.site",
+    "sites.google.com", "wordpress.com", "blogspot.com", "issuu.com", "proff.no", "gulesider.no",
+    "1881.no", "finn.no", "brreg.no", "mac.com",
+}
+
 PARKED_MARKERS = (
     "domain is for sale", "domain for sale", "this domain may be for sale", "hugedomains",
     "parked at", "buy this domain", "domenet er til salgs", "her flytter snart en ny gjest",
@@ -73,7 +81,7 @@ def candidate_domains(entity: dict[str, Any]) -> list[tuple[str, str]]:
     """Domains worth fetching for this entity, each tagged with where it came from."""
     out: list[tuple[str, str]] = []
     site = _host(entity.get("website"))
-    if site:
+    if site and not any(site == d or site.endswith("." + d) for d in PLATFORM_DOMAINS):
         out.append((site, "registry_website"))
     mail = _email_domain(entity.get("email"))
     if mail and mail not in FREEMAIL_DOMAINS:
