@@ -313,7 +313,7 @@ def test_a_guessed_domain_is_verified_by_full_name_plus_registered_postal_code()
 def test_a_guessed_domain_is_never_verified_by_a_matching_name_alone():
     home = "<html><title>Sandnes Elektriske</title><body>Velkommen til vår elektrikerbedrift.</body></html>"
     result, _, _ = run(NO_CANDIDATE, client_bundle=guess_site(home))
-    assert result["status"] == "ambiguous"
+    assert result["status"] == "not_available"  # a guess that cannot be verified is simply not found
     assert result["socials"] == [] and result["pages"] == []
 
 
@@ -351,8 +351,8 @@ def test_guessing_is_tried_when_the_registry_candidate_is_a_dead_domain():
 def test_a_guess_on_a_shared_domain_is_related_and_never_published():
     home = "<html><title>Sandnes Elektriske</title><body>Org.nr 810 034 882</body></html>"
     result, _, _ = run(NO_CANDIDATE, client_bundle=guess_site(home), multiplicity={"sandneselektriske.no": 9})
-    assert result["status"] == "ambiguous"
-    assert result["candidates"][0]["outcome"] == "related"
+    assert result["status"] == "not_available"
+    assert result["candidates"][0]["assessment"] == "related"  # the raw judgement is kept for transparency
 
 
 def test_discovery_never_probes_a_domain_that_was_already_tried_or_blocked():
@@ -369,3 +369,39 @@ def test_a_guess_equal_to_an_already_tried_registry_domain_is_skipped():
     result, _, seen = run(entity, client_bundle=bundle)
     assert [g["domain"] for g in result["guesses"]] == ["sandnes-elektriske.no"]
     assert seen.count("https://sandneselektriske.no/") == 1
+
+
+# ---- a guess that cannot be verified is simply "not found" -------------------------
+
+
+def test_an_unverified_guess_never_reports_ambiguous_blocked_or_failed():
+    # nothing tied this domain to the company, so no claim may be made *about* it
+    cases = {
+        "namesake": site({f"{GUESS}/": (200, "<html><title>Sandnes Elektriske</title><body>Hei</body></html>")},
+                         unresolvable={"sandnes-elektriske.no"}),
+        "robots": site({f"{GUESS}/robots.txt": (200, "User-agent: *\nDisallow: /\n"), f"{GUESS}/": (200, HOME)},
+                       unresolvable={"sandnes-elektriske.no"}),
+        "server error": site({f"{GUESS}/": (503, "")}, unresolvable={"sandnes-elektriske.no"}),
+        "timeout": site({f"{GUESS}/": ("timeout", ""), f"{GUESS}/robots.txt": ("timeout", ""),
+                         "https://www.sandneselektriske.no/robots.txt": ("timeout", ""),
+                         "https://www.sandneselektriske.no/": ("timeout", "")},
+                        unresolvable={"sandnes-elektriske.no"}),
+    }
+    for label, bundle in cases.items():
+        result, _, _ = run(NO_CANDIDATE, client_bundle=bundle)
+        assert result["status"] == "not_available", label
+        assert result["candidates"][0]["source"] == "name_guess", label
+        assert result["socials"] == [] and result["pages"] == [], label
+
+
+def test_guesses_use_a_short_timeout_so_a_dead_host_cannot_stall_a_company():
+    timeouts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        timeouts.append(request.extensions["timeout"]["connect"])
+        return httpx.Response(404, text="")
+
+    client = CountingClient(transport=httpx.MockTransport(handler), max_requests=50,
+                            resolver=lambda h: ["8.8.8.8"], timeout=20.0)
+    research_website(NO_CANDIDATE, client, RobotsCache(client), {}, discover=True)
+    assert timeouts and max(timeouts) <= 6.0

@@ -165,7 +165,7 @@ class CountingClient:
 
     def _get(self, url: str, *, accept: str, max_redirects: int, max_bytes: int,
              allow: Callable[[str], bool] | None = None,
-             extra_headers: dict[str, str] | None = None) -> FetchResult:
+             extra_headers: dict[str, str] | None = None, timeout: float | None = None) -> FetchResult:
         started = time.monotonic()
         chain: list[str] = []
         current = url
@@ -196,7 +196,8 @@ class CountingClient:
                 # credentials and conditional headers are sent only to the host we were asked to call
                 same_host = urllib.parse.urlparse(current).netloc == urllib.parse.urlparse(url).netloc
                 headers = {"Accept": accept, **(extra_headers if same_host and extra_headers else {})}
-                with self._client.stream("GET", current, headers=headers) as response:
+                with self._client.stream("GET", current, headers=headers,
+                                         timeout=timeout if timeout is not None else httpx.USE_CLIENT_DEFAULT) as response:
                     raw = bytearray()
                     truncated = False
                     for piece in response.iter_bytes():
@@ -232,10 +233,10 @@ class CountingClient:
 
     def fetch_page(self, url: str, *, max_redirects: int = 5, max_bytes: int = 1_500_000,
                    allow: Callable[[str], bool] | None = None,
-                   headers: dict[str, str] | None = None) -> FetchResult:
+                   headers: dict[str, str] | None = None, timeout: float | None = None) -> FetchResult:
         """GET a page, following redirects manually. `allow(url)` is consulted before every hop."""
         return self._get(url, accept="text/html,application/xhtml+xml,*/*;q=0.8",
-                         max_redirects=max_redirects, max_bytes=max_bytes, allow=allow, extra_headers=headers)
+                         max_redirects=max_redirects, max_bytes=max_bytes, allow=allow, extra_headers=headers, timeout=timeout)
 
     def close(self) -> None:
         self._client.close()

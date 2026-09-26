@@ -17,6 +17,7 @@ from .robots import RobotsCache
 
 FAN_OUT_KINDS = ("contact", "about", "careers", "news")
 MAX_CANDIDATES = 2
+GUESS_TIMEOUT = 6.0  # seconds: a guessed host that does not answer quickly is not worth waiting for
 
 
 def _site(host: str) -> str:
@@ -186,8 +187,10 @@ def research_website(
         """Fetch and judge one candidate. Returns the finished result if it is verified, else None."""
         if multiplicity is None:
             candidate = {**candidate, "source": "unchecked_" + candidate["source"]}
+        guessed = candidate["source"].endswith("name_guess")
         for attempt in _attempt_urls(candidate["url"]):
-            fetch = client.fetch_page(attempt, allow=robots.allowed)
+            limit = GUESS_TIMEOUT if guessed else None
+            fetch = client.fetch_page(attempt, allow=lambda u, t=limit: robots.allowed(u, timeout=t), timeout=limit)
             candidate = {**candidate, "url": attempt}
             if not _unreachable(fetch):
                 break
@@ -198,6 +201,8 @@ def research_website(
         failure = _fetch_outcome(fetch)
         if failure:
             record["outcome"], record["reason"] = failure
+            if guessed:  # nothing ties a guessed domain to the company: no claim may be made *about* it
+                record["assessment"], record["outcome"] = failure[0], "not_available"
             candidates.append(record)
             return None
         extraction = extract_page(fetch.text or "", fetch.final_url or candidate["url"])
@@ -208,6 +213,9 @@ def research_website(
         assessment = assess_site(entity, page, candidate["source"], multiplicity or {})
         outcome = "not_available" if assessment["status"] == "placeholder" else assessment["status"]
         record["outcome"], record["reason"] = outcome, "; ".join(assessment["reasons"])
+        if guessed and assessment["status"] != "exact":
+            record["assessment"], record["outcome"] = outcome, "not_available"
+            record["reason"] = "a domain matching the name exists but could not be tied to this company: " + record["reason"]
         candidates.append(record)
         if assessment["status"] != "exact":
             return None

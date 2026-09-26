@@ -23,8 +23,8 @@ class RobotsCache:
         self._guard = threading.Lock()
         self._origin_locks: dict[str, threading.Lock] = {}
 
-    def _load(self, origin: str) -> urllib.robotparser.RobotFileParser | bool:
-        result = self._client.fetch_page(f"{origin}/robots.txt", max_bytes=500_000)
+    def _load(self, origin: str, timeout: float | None) -> urllib.robotparser.RobotFileParser | bool:
+        result = self._client.fetch_page(f"{origin}/robots.txt", max_bytes=500_000, timeout=timeout)
         if result.status == 200:
             parser = urllib.robotparser.RobotFileParser()
             parser.parse((result.text or "").splitlines())
@@ -35,14 +35,14 @@ class RobotsCache:
             return True
         return False  # 5xx: the server answered but robots.txt is unavailable -> assume disallowed (RFC 9309)
 
-    def allowed(self, url: str) -> bool:
+    def allowed(self, url: str, *, timeout: float | None = None) -> bool:
         parsed = urllib.parse.urlparse(url)
         origin = f"{parsed.scheme}://{parsed.netloc}"
         with self._guard:
             origin_lock = self._origin_locks.setdefault(origin, threading.Lock())
         with origin_lock:  # one robots.txt fetch per origin, however many threads ask at once
             if origin not in self._parsers:
-                self._parsers[origin] = self._load(origin)
+                self._parsers[origin] = self._load(origin, timeout)
         rules = self._parsers[origin]
         if isinstance(rules, bool):
             return rules

@@ -336,3 +336,17 @@ def test_budget_is_never_exceeded_even_when_threads_wait_on_a_throttle():
         outcomes = list(pool.map(call, range(48)))
     assert outcomes.count("ok") == 10
     assert client.requests_made == 10
+
+
+def test_fetch_page_accepts_a_per_call_timeout():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(request.extensions["timeout"])
+        return httpx.Response(200, text="<html></html>", headers={"content-type": "text/html"})
+
+    client = CountingClient(transport=httpx.MockTransport(handler), resolver=lambda h: ["8.8.8.8"], timeout=20.0)
+    client.fetch_page("https://a.no/", timeout=4.0)
+    assert seen["connect"] == 4.0 and seen["read"] == 4.0
+    client.fetch_page("https://a.no/")
+    assert seen["connect"] == 20.0
