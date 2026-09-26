@@ -198,3 +198,33 @@ def test_decodes_latin1_pages_declared_via_meta_and_falls_back_for_undeclared_by
     undeclared = "Blåbær".encode("cp1252")  # invalid UTF-8, no declaration anywhere
     assert _decode(undeclared, "text/html") == "Blåbær"
     assert _decode("Blåbær".encode("utf-8"), "text/html") == "Blåbær"
+
+
+# ---- per-hop permission hook (used for robots.txt) -----------------------------
+
+
+def test_allow_hook_can_veto_the_first_request_before_any_page_is_fetched():
+    client = _redirecting_client({"https://a.no/": "BODY:secret"})
+    result = client.fetch_page("https://a.no/", allow=lambda url: False)
+    assert result.status == 0
+    assert "robots" in (result.error or "").lower()
+    assert client.requests_made == 0
+
+
+def test_allow_hook_is_consulted_for_every_redirect_hop():
+    client = _redirecting_client({"https://a.no/": "https://b.no/", "https://b.no/": "BODY:ok"})
+    result = client.fetch_page("https://a.no/", allow=lambda url: "b.no" not in url)
+    assert result.status == 0
+    assert "robots" in (result.error or "").lower()
+    assert client.requests_made == 1  # a.no was fetched; b.no was vetoed before being requested
+
+
+def test_requests_made_by_the_allow_hook_itself_are_counted_and_budgeted():
+    client = _redirecting_client({"https://a.no/": "BODY:ok", "https://a.no/robots.txt": "BODY:x"}, max_requests=1)
+
+    def allow(url):
+        client.fetch_page("https://a.no/robots.txt")  # consumes the whole budget
+        return True
+
+    with pytest.raises(BudgetExceeded):
+        client.fetch_page("https://a.no/", allow=allow)

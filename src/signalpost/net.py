@@ -141,7 +141,8 @@ class CountingClient:
                     now = self._clock()
                 self._last_request_at[prefix] = now
 
-    def _get(self, url: str, *, accept: str, max_redirects: int, max_bytes: int) -> FetchResult:
+    def _get(self, url: str, *, accept: str, max_redirects: int, max_bytes: int,
+             allow: Callable[[str], bool] | None = None) -> FetchResult:
         started = time.monotonic()
         chain: list[str] = []
         current = url
@@ -163,6 +164,10 @@ class CountingClient:
                 assert_public_url(current, resolver=self._resolver)
             except ValueError as exc:
                 return result(error=f"blocked: {exc}")
+            if allow is not None and not allow(current):
+                return result(error="blocked: robots.txt disallows this URL")
+            if self.requests_made >= self.max_requests:  # the allow hook may itself have spent budget
+                raise BudgetExceeded(f"Request budget of {self.max_requests} exhausted before fetching {current!r}")
             self._wait_for_slot(current)
             self.requests_made += 1
             chain.append(current)
@@ -200,9 +205,11 @@ class CountingClient:
                 found.error = "invalid_json"
         return found
 
-    def fetch_page(self, url: str, *, max_redirects: int = 5, max_bytes: int = 1_500_000) -> FetchResult:
+    def fetch_page(self, url: str, *, max_redirects: int = 5, max_bytes: int = 1_500_000,
+                   allow: Callable[[str], bool] | None = None) -> FetchResult:
+        """GET a page, following redirects manually. `allow(url)` is consulted before every hop."""
         return self._get(url, accept="text/html,application/xhtml+xml,*/*;q=0.8",
-                         max_redirects=max_redirects, max_bytes=max_bytes)
+                         max_redirects=max_redirects, max_bytes=max_bytes, allow=allow)
 
     def close(self) -> None:
         self._client.close()

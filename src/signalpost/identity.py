@@ -110,6 +110,14 @@ def _result(
     }
 
 
+def _find_org_number(text: str, org: str) -> re.Match[str] | None:
+    """First standalone 9-digit run (optionally spaced 3-3-3) equal to `org`."""
+    for m in re.finditer(r"(?<!\d)(\d{3}\s?\d{3}\s?\d{3})(?!\d)", text):
+        if re.sub(r"\D", "", m.group(1)) == org:
+            return m
+    return None
+
+
 def _context(text: str, start: int, end: int, radius: int = 40) -> str:
     return " ".join(text[max(0, start - radius): end + radius].split())
 
@@ -127,11 +135,20 @@ def assess_site(
     if any(marker in _fold(blob) for marker in PARKED_MARKERS):
         return _result("ambiguous", None, ["page is a parked or for-sale placeholder"], [])
 
-    # P1: our exact org number, as a standalone 9-digit run (optionally spaced 3-3-3)
-    for m in re.finditer(r"(?<!\d)(\d{3}\s?\d{3}\s?\d{3})(?!\d)", blob):
-        if re.sub(r"\D", "", m.group(1)) == org:
-            return _result("exact", "P1", ["organisation number appears on the page"], [],
-                           _context(blob, m.start(), m.end()))
+    shared = multiplicity.get(host, 1) > 1
+
+    # P1: our exact org number. Declared in structured identity (JSON-LD vatID) it proves the
+    # site is this entity even on a shared domain; in body text alone it only counts when the
+    # domain is unique, because managers and accountants list their clients' numbers.
+    declared = str(page.get("identity_text") or "")
+    hit = _find_org_number(declared, org)
+    if hit:
+        return _result("exact", "P1", ["organisation number declared in the site's structured identity"], [],
+                       _context(declared, hit.start(), hit.end()))
+    hit = _find_org_number(blob, org)
+    if hit and not shared:
+        return _result("exact", "P1", ["organisation number appears on the page"], [],
+                       _context(blob, hit.start(), hit.end()))
 
     # R: the page names a different organisation number
     others = {re.sub(r"\D", "", m.group(1)) for m in _ORG_LABELLED.finditer(blob)} - {org}
@@ -142,7 +159,7 @@ def assess_site(
         )
 
     # R: a domain shared by several registry entities is not this entity's own site
-    if multiplicity.get(host, 1) > 1:
+    if shared:
         return _result(
             "related", None,
             [f"domain {host} is shared by {multiplicity[host]} registry entities"], [],

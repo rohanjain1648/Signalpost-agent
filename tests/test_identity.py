@@ -163,3 +163,23 @@ def test_exact_results_carry_a_quotable_evidence_span():
 def test_non_exact_results_have_no_span():
     result = assess_site(ENTITY, page(title="Sandnes Bakeri"), "registry_website", {})
     assert result["span"] is None
+
+
+def test_org_number_in_body_text_of_a_shared_domain_is_related_not_exact():
+    # e.g. a manager or accountant whose site lists client org numbers
+    result = assess_site(
+        ENTITY, page(text="Våre kunder: Org.nr 810 034 882", final_url="https://kbbl.bu.no/"),
+        "email_domain", {"kbbl.bu.no": 40},
+    )
+    assert result["status"] == "related"
+    assert result["publishable"] is False
+
+
+def test_org_number_declared_in_structured_identity_on_a_shared_domain_is_exact():
+    result = assess_site(
+        ENTITY,
+        {**page(final_url="https://kbbl.bu.no/"), "identity_text": "Sandnes Elektriske AS NO 810 034 882 MVA"},
+        "email_domain", {"kbbl.bu.no": 40},
+    )
+    assert result["status"] == "exact"
+    assert result["tier"] == "P1"
