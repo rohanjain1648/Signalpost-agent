@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import socket
+import threading
 import time
 import urllib.parse
 from dataclasses import dataclass
@@ -21,6 +22,9 @@ import httpx
 USER_AGENT = "signalpost-agent/0.1 (+https://github.com/; company research)"
 
 Resolver = Callable[[str], list[str]]
+
+# BRREG's filing-year endpoint allows roughly 30 request starts per minute; stay under it.
+PRODUCTION_THROTTLES: dict[str, float] = {"/aarsregnskap/kopi/": 2.1}
 
 
 def _default_resolver(host: str) -> list[str]:
@@ -79,6 +83,9 @@ class CountingClient:
         max_requests: int = 1900,
         timeout: float = 20.0,
         resolver: Resolver = _default_resolver,
+        throttles: dict[str, float] | None = None,
+        clock: Callable[[], float] = time.monotonic,
+        sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
         self._client = httpx.Client(
             transport=transport,
@@ -89,6 +96,24 @@ class CountingClient:
         self.max_requests = max_requests
         self.requests_made = 0
         self._resolver = resolver
+        self._throttles = throttles or {}
+        self._clock = clock
+        self._sleeper = sleeper
+        self._throttle_lock = threading.Lock()
+        self._last_request_at: dict[str, float] = {}
+
+    def _wait_for_slot(self, url: str) -> None:
+        """Space out requests to rate-limited endpoints (minimum seconds between starts)."""
+        for prefix, interval in self._throttles.items():
+            if prefix not in url:
+                continue
+            with self._throttle_lock:
+                now = self._clock()
+                last = self._last_request_at.get(prefix)
+                if last is not None and interval - (now - last) > 0:
+                    self._sleeper(interval - (now - last))
+                    now = self._clock()
+                self._last_request_at[prefix] = now
 
     def fetch_json(self, url: str) -> FetchResult:
         if self.requests_made >= self.max_requests:
@@ -96,6 +121,7 @@ class CountingClient:
                 f"Request budget of {self.max_requests} exhausted before fetching {url!r}"
             )
         assert_public_url(url, resolver=self._resolver)
+        self._wait_for_slot(url)
         self.requests_made += 1
         started = time.monotonic()
         try:

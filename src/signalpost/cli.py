@@ -19,7 +19,7 @@ from typing import Callable, Sequence
 from . import AGENT_VERSION, SCHEMA_VERSION
 from .batch import read_organisation_numbers, run_batch
 from .models import Envelope
-from .net import CountingClient
+from .net import PRODUCTION_THROTTLES, CountingClient
 from .pipeline import process_company
 from .store import load_state, save_state
 
@@ -45,7 +45,7 @@ def main(argv: Sequence[str] | None = None, *, client_factory: ClientFactory | N
     run_ts = _utc_now()
     run_id = args.run_id or run_ts
     orgs = read_organisation_numbers(args.input)
-    client = client_factory(args.max_requests) if client_factory else CountingClient(max_requests=args.max_requests)
+    client = client_factory(args.max_requests) if client_factory else CountingClient(max_requests=args.max_requests, throttles=PRODUCTION_THROTTLES)
 
     def worker(org: str) -> Envelope:
         prev = load_state(args.state_dir, org)

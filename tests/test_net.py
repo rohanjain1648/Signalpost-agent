@@ -58,3 +58,59 @@ def test_fetch_json_reports_404_as_not_found_status():
     result = client.fetch_json("https://example.no/missing")
     assert result.status == 404
     assert result.body is None
+
+
+# ---- per-endpoint throttling ---------------------------------------------------
+
+
+class FakeClock:
+    def __init__(self):
+        self.now = 0.0
+        self.sleeps = []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+def _throttled_client(clock, throttles):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[])
+
+    return CountingClient(
+        transport=httpx.MockTransport(handler),
+        max_requests=50,
+        resolver=lambda host: ["8.8.8.8"],
+        throttles=throttles,
+        clock=clock.monotonic,
+        sleeper=clock.sleep,
+    )
+
+
+def test_throttled_endpoint_waits_between_consecutive_requests():
+    clock = FakeClock()
+    client = _throttled_client(clock, {"/aarsregnskap/kopi/": 2.1})
+    client.fetch_json("https://data.brreg.no/x/aarsregnskap/kopi/1/aar")
+    client.fetch_json("https://data.brreg.no/x/aarsregnskap/kopi/2/aar")
+    assert len(clock.sleeps) == 1
+    assert clock.sleeps[0] == pytest.approx(2.1)
+
+
+def test_throttle_does_not_sleep_when_enough_time_has_already_passed():
+    clock = FakeClock()
+    client = _throttled_client(clock, {"/aarsregnskap/kopi/": 2.1})
+    client.fetch_json("https://data.brreg.no/x/aarsregnskap/kopi/1/aar")
+    clock.now += 5.0
+    client.fetch_json("https://data.brreg.no/x/aarsregnskap/kopi/2/aar")
+    assert clock.sleeps == []
+
+
+def test_unthrottled_endpoints_never_sleep():
+    clock = FakeClock()
+    client = _throttled_client(clock, {"/aarsregnskap/kopi/": 2.1})
+    client.fetch_json("https://data.brreg.no/enhetsregisteret/api/enheter/1")
+    client.fetch_json("https://data.brreg.no/enhetsregisteret/api/enheter/2")
+    assert clock.sleeps == []
