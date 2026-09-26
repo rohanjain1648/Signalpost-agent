@@ -42,6 +42,13 @@ def _display_name(entity_or_person: dict[str, Any] | None) -> str | None:
     return None
 
 
+def _capital(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return {"amount": value.get("belop"), "currency": value.get("valuta"), "type": value.get("type"),
+            "registered_date": value.get("innfortDato")}
+
+
 def normalize_entity(body: Any) -> dict[str, Any]:
     body = body if isinstance(body, dict) else {}
     return {
@@ -64,6 +71,10 @@ def normalize_entity(body: Any) -> dict[str, Any]:
         "postal_address": body.get("postadresse"),
         "historical_names": body.get("historiskeNavn") or [],
         "latest_submitted_accounts": body.get("sisteInnsendteAarsregnskap"),
+        "articles_date": body.get("vedtektsdato"),
+        "capital": _capital(body.get("kapital")),
+        "employees_registered_date": body.get("registreringsdatoAntallAnsatteEnhetsregisteret"),
+        "founded_date": body.get("stiftelsesdato"),
     }
 
 

@@ -122,3 +122,45 @@ def test_failed_roles_refresh_keeps_last_supported_roles_and_reports_no_change()
     role_claims = [c for c in state2.values() if c["family"] == "roles"]
     assert role_claims and all(c["status"] == "stale" for c in role_claims)
     assert all(c["value"] for c in role_claims)
+
+
+# ---- dated public activity from official records ----------------------------------
+
+
+def _activity(envelope):
+    return claims_by_field(envelope)["dated_activity"]
+
+
+def test_dated_activity_lists_registry_events_newest_first_with_evidence():
+    envelope, _ = run(make_client())
+    claim = _activity(envelope)
+    assert claim.availability == "available"
+    items = claim.value["items"]
+    dates = [i["date"] for i in items]
+    assert dates == sorted(dates, reverse=True)
+    kinds = {i["type"] for i in items}
+    assert {"share_capital_registered", "articles_of_association", "roles_changed"} <= kinds
+    assert claim.as_of == dates[0] == "2026-07-15"  # employee count registered is the newest event
+    evidence_ids = {e.id for e in envelope.evidence}
+    assert all(i["evidence_id"] in evidence_ids for i in items)
+    assert set(claim.evidence_ids) <= evidence_ids
+
+
+def test_dated_activity_items_carry_what_happened_not_just_a_date():
+    envelope, _ = run(make_client())
+    items = {i["type"]: i for i in _activity(envelope).value["items"]}
+    assert items["share_capital_registered"]["detail"] == {"amount": 2375000.0, "currency": "NOK"}
+    assert items["roles_changed"]["detail"]["group"] in {"Styre", "Daglig leder", "Revisor", "Regnskapsfører"}
+
+
+def test_activity_changes_are_reported_once_and_rerun_is_quiet():
+    envelope1, state1 = run(make_client(), ts=T1)
+    assert any(c["type"] == "new_activity" for c in envelope1.changes)
+    envelope2, _ = run(make_client(), prev=state1, ts=T2)
+    assert envelope2.changes == []
+
+
+def test_dated_activity_is_failed_when_the_registry_cannot_be_read():
+    overrides = {url: 503 for url in URL_TO_FIXTURE}
+    envelope, _ = run(make_client(overrides))
+    assert _activity(envelope).availability == "failed"

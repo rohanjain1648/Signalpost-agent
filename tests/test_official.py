@@ -84,3 +84,17 @@ def test_normalize_locations_extracts_subunit_address_and_industry():
     assert first["organisation_number"] == "973150480"
     assert first["address"]["kommune"] == "SANDNES"
     assert first["industry"]["kode"] == "43.210"
+
+
+def test_normalize_entity_keeps_the_dated_registry_fields():
+    entity = normalize_entity(load("entity_810034882.json"))
+    assert entity["articles_date"] == "2026-02-19"
+    assert entity["capital"] == {"amount": 2375000.0, "currency": "NOK", "type": "Aksjekapital",
+                                 "registered_date": "2026-05-13"}
+    assert entity["employees_registered_date"] == "2026-07-15"
+    assert entity["founded_date"] == "1977-06-15"
+
+
+def test_normalize_entity_dated_fields_are_none_when_absent():
+    entity = normalize_entity({"organisasjonsnummer": "810034882", "navn": "X AS"})
+    assert entity["articles_date"] is None and entity["capital"] is None

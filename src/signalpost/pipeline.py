@@ -31,6 +31,7 @@ FIELD = {
     "locations": "registered_workplaces",
     "group": "corporate_group",
 }
+ACTIVITY_LIMIT = 15
 LEDGER_FAMILY = {
     "financials": "financials",
     "financial_history": "financials",
@@ -95,6 +96,46 @@ def _as_of(module: str, value: Any) -> str | None:
     return max((e for e in ends if e), default=None)
 
 
+def _activity_items(modules: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Dated official events already present in the registry responses (no extra requests)."""
+    items: list[dict[str, Any]] = []
+    entity = modules["registry_live"].get("value") or {}
+    if entity.get("articles_date"):
+        items.append({"type": "articles_of_association", "date": entity["articles_date"],
+                      "detail": {"description": "articles of association adopted or amended"},
+                      "evidence_id": "ev-registry_live"})
+    capital = entity.get("capital") or {}
+    if capital.get("registered_date"):
+        items.append({"type": "share_capital_registered", "date": capital["registered_date"],
+                      "detail": {"amount": capital.get("amount"), "currency": capital.get("currency")},
+                      "evidence_id": "ev-registry_live"})
+    if entity.get("employees_registered_date") and entity.get("employees") is not None:
+        items.append({"type": "employee_count_registered", "date": entity["employees_registered_date"],
+                      "detail": {"employees": entity["employees"]}, "evidence_id": "ev-registry_live"})
+    roles = (modules.get("roles", {}).get("value") or {}).get("roles", [])
+    groups: dict[tuple[str, str], str] = {}
+    for role in roles:
+        if not role["inactive"] and role["last_changed"]:
+            groups[(role["group_code"] or "", role["last_changed"])] = role["group"] or ""
+    for (_, date), group in groups.items():
+        items.append({"type": "roles_changed", "date": date, "detail": {"group": group},
+                      "evidence_id": "ev-roles"})
+    items.sort(key=lambda i: (i["date"], i["type"], str(i["detail"])), reverse=True)
+    return items[:ACTIVITY_LIMIT]
+
+
+def _activity_claim(items: list[dict[str, Any]], modules: dict[str, dict[str, Any]]) -> Claim:
+    entity_status = modules["registry_live"]["status"]
+    if entity_status == "source_error":
+        return Claim(field="dated_activity", availability="failed", evidence_ids=["ev-registry_live"],
+                     note="the registry could not be read")
+    if not items:
+        return Claim(field="dated_activity", availability="not_available", evidence_ids=["ev-registry_live"],
+                     note="the registry records no dated events for this entity")
+    return Claim(field="dated_activity", value={"items": items}, availability="available",
+                 as_of=items[0]["date"], evidence_ids=list(dict.fromkeys(i["evidence_id"] for i in items)))
+
+
 def _observations(org: str, modules: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     obs: list[dict[str, Any]] = []
 
@@ -137,6 +178,15 @@ def _observations(org: str, modules: dict[str, dict[str, Any]]) -> list[dict[str
             "evidence_id": evidence_id("financial_history"),
         })
     return obs
+
+
+def _activity_observations(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [{
+        "family": "activity",
+        "key": f"{i['type']}|{i['detail'].get('group', '')}|{i['date']}",
+        "value": {"type": i["type"], "date": i["date"], "detail": i["detail"]},
+        "evidence_id": i["evidence_id"],
+    } for i in items]
 
 
 def process_company(
@@ -187,8 +237,14 @@ def process_company(
         LEDGER_FAMILY[m] for m, r in modules.items()
         if m in LEDGER_FAMILY and r["status"] in {"available", "not_found"}
     } - {"financials"}  # the accounts endpoint only returns recent periods: older ones are never "withdrawn"
+    # activity events are history, not current state: a newer event never "withdraws" an older one
     failed = {LEDGER_FAMILY[m] for m, r in modules.items() if m in LEDGER_FAMILY and r["status"] == "source_error"}
     observations = _observations(org, modules)
+    activity = _activity_items(modules)
+    claims.append(_activity_claim(activity, modules))
+    observations.extend(_activity_observations(activity))
+    if entity["status"] == "source_error" or modules.get("roles", {}).get("status") == "source_error":
+        failed.add("activity")
     if web is not None:
         if entity["status"] == "available":
             try:
