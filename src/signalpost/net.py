@@ -155,7 +155,8 @@ class CountingClient:
                 self._last_request_at[prefix] = now
 
     def _get(self, url: str, *, accept: str, max_redirects: int, max_bytes: int,
-             allow: Callable[[str], bool] | None = None) -> FetchResult:
+             allow: Callable[[str], bool] | None = None,
+             extra_headers: dict[str, str] | None = None) -> FetchResult:
         started = time.monotonic()
         chain: list[str] = []
         current = url
@@ -185,7 +186,10 @@ class CountingClient:
             self.requests_made += 1
             chain.append(current)
             try:
-                with self._client.stream("GET", current, headers={"Accept": accept}) as response:
+                # credentials and conditional headers are sent only to the host we were asked to call
+                same_host = urllib.parse.urlparse(current).netloc == urllib.parse.urlparse(url).netloc
+                headers = {"Accept": accept, **(extra_headers if same_host and extra_headers else {})}
+                with self._client.stream("GET", current, headers=headers) as response:
                     raw = bytearray()
                     truncated = False
                     for piece in response.iter_bytes():
@@ -209,8 +213,9 @@ class CountingClient:
             return found
         return result(error="too many redirects")
 
-    def fetch_json(self, url: str) -> FetchResult:
-        found = self._get(url, accept="application/json", max_redirects=3, max_bytes=10_000_000)
+    def fetch_json(self, url: str, *, headers: dict[str, str] | None = None) -> FetchResult:
+        found = self._get(url, accept="application/json", max_redirects=3, max_bytes=10_000_000,
+                          extra_headers=headers)
         if found.status == 200:
             try:
                 found.body = json.loads(found.text or "")
@@ -219,10 +224,11 @@ class CountingClient:
         return found
 
     def fetch_page(self, url: str, *, max_redirects: int = 5, max_bytes: int = 1_500_000,
-                   allow: Callable[[str], bool] | None = None) -> FetchResult:
+                   allow: Callable[[str], bool] | None = None,
+                   headers: dict[str, str] | None = None) -> FetchResult:
         """GET a page, following redirects manually. `allow(url)` is consulted before every hop."""
         return self._get(url, accept="text/html,application/xhtml+xml,*/*;q=0.8",
-                         max_redirects=max_redirects, max_bytes=max_bytes, allow=allow)
+                         max_redirects=max_redirects, max_bytes=max_bytes, allow=allow, extra_headers=headers)
 
     def close(self) -> None:
         self._client.close()

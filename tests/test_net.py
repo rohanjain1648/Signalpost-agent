@@ -251,3 +251,36 @@ def test_private_addresses_do_not_count_as_resolving_candidates():
     client = CountingClient(transport=httpx.MockTransport(lambda r: httpx.Response(200)),
                             resolver=lambda host: ["10.0.0.1"])
     assert client.resolves("intranet.no") is False
+
+
+# ---- custom request headers (API tokens, conditional requests) -------------------
+
+
+def test_fetch_json_sends_custom_headers_and_still_counts_the_request():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(request.headers)
+        return httpx.Response(200, json={"ok": True})
+
+    client = CountingClient(transport=httpx.MockTransport(handler), resolver=lambda h: ["8.8.8.8"])
+    result = client.fetch_json("https://feed.example/api", headers={"Authorization": "Bearer abc",
+                                                                   "If-Modified-Since": "Sat, 26 Sep 2026 00:00:00 GMT"})
+    assert result.body == {"ok": True}
+    assert seen["authorization"] == "Bearer abc"
+    assert seen["if-modified-since"].startswith("Sat, 26 Sep")
+    assert client.requests_made == 1
+
+
+def test_custom_headers_are_not_forwarded_across_a_redirect_to_another_host():
+    hosts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hosts.append((request.url.host, request.headers.get("authorization")))
+        if request.url.host == "feed.example":
+            return httpx.Response(302, headers={"location": "https://other.example/x"})
+        return httpx.Response(200, json={})
+
+    client = CountingClient(transport=httpx.MockTransport(handler), resolver=lambda h: ["8.8.8.8"])
+    client.fetch_json("https://feed.example/api", headers={"Authorization": "Bearer secret"})
+    assert hosts == [("feed.example", "Bearer secret"), ("other.example", None)]
