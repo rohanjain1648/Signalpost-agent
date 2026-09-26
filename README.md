@@ -13,10 +13,11 @@ attributed to a company on the strength of a similar name.
 Run it again later with the same state directory and it reports only *real* changes,
 keeping the earlier evidence.
 
-> **Status: work in progress.** The official-data base and website research are built,
-> tested and validated on live data. Coverage of websites, hiring and activity is still
-> low. See [What works today](#what-works-today) and
-> [Known limitations](#known-limitations) before relying on any number in this document.
+> **Status: work in progress.** The official-data base, website research, discovery, NAV job
+> ads and refresh are built, tested and validated on live data. Website and hiring *coverage*
+> is still low (about 6% of a random batch gets a verified website). See
+> [What works today](#what-works-today) and [Known limitations](#known-limitations) before
+> relying on any number in this document.
 
 ---
 
@@ -114,13 +115,13 @@ is empty.
 | Refresh ledger: stable claim IDs, idempotent reruns, typed changes, `stale` vs `closed` | Built, validated live |
 | robots.txt (RFC 9309) on every request hop; SSRF guard; request budget; per-endpoint throttle | Built, tested |
 | Discovery of websites for companies with no registry website or email domain (name-derived domains, verified only by organisation number or name + postal code) | Built, validated live |
-| Job ads from NAV's public feed, attributed by organisation number | Built, tested; index build in progress |
+| Job ads from NAV's public feed, attributed by the ad's own employer organisation number (sub-units included) | Built, validated live |
 | Dated activity from registry records (articles, capital, employees, role changes) | Built, validated live |
 | Concurrent processing with soft and hard time budgets | Built, validated live |
 | Written company briefing; static viewer; hand-labelled gold set | **Not built** |
 | Dated activity from news pages on company sites | **Not built** |
 
-174 automated tests pass. Development was test-first: each behaviour was written as a
+247 automated tests pass. Development was test-first: each behaviour was written as a
 failing test before its implementation.
 
 ---
@@ -464,6 +465,21 @@ uv run python scripts/build_domain_table.py brreg-enheter.csv.gz data/domain_mul
 The bulk file is about 155 MB and the build takes about 35 seconds. Rebuild it when the
 registry snapshot the evaluation uses changes.
 
+### Rebuilding the NAV job index
+
+```bash
+uv run python scripts/crawl_nav_feed.py --since 2026-03-26 --output out/nav-state.json.gz   # ~30 min, resumable
+uv run python scripts/build_nav_index.py out/nav-state.json.gz data/nav_jobs_index.json.gz
+```
+
+Use a `--since` date about six months back (NAV documents that active ads never exceed that). The crawl
+makes one request per feed page (about 380 pages) and checkpoints every ten pages; rerun the same command to
+resume. Rebuild shortly before the final submission so the run-time catch-up stays short.
+
+Feed quirk: the feed answers **404, not 304 or an empty page, when nothing has changed** since the
+`If-Modified-Since` date. A 404 on the *first* catch-up request is therefore treated as "index is current"
+(`up_to_date: true` in the run report); a 404 or 5xx anywhere else is an error and marks NAV not ready.
+
 ### Adding a source or field family
 
 1. Write failing tests first (`tests/`), using recorded or simulated responses.
@@ -477,28 +493,31 @@ registry snapshot the evaluation uses changes.
 
 ## Validation results
 
-Measured on 100 random companies from the 411,160-company universe, against the live
-registry and real company websites, on 2026-09-26. These are development measurements,
-not evaluator scores.
+Measured on the same 100 random companies from the 411,160-company universe, against the live
+registry, real company websites and the live NAV feed, on 2026-09-26. These are development
+measurements, not evaluator scores.
 
 | Measure | Result |
 |---|---|
 | Envelopes returned | 100 of 100 |
 | Terminal status | 100 completed, 0 failed |
-| Requests used | about 596 of 2,000 |
-| Runtime | about 4.5 minutes of 45 |
+| Requests used | 651 of 2,000 (plus 746 DNS lookups, which are not HTTP requests) |
+| Runtime | 3 min 54 s of 45, with 6 workers |
 | Third-party cost | $0 |
-| Official identity, accounts, filing history, leadership | 99–100% available |
-| Registered workplaces | 80% available; the rest have no registered sub-unit |
-| Verified official websites | **3 of 100**, all checked by hand and correct |
-| Candidates refused as `ambiguous` | 14 at the time of the run: shared domains, another organisation's number, no anchor, and 2 placeholder pages |
-| Dead web servers | 5 reported `failed`; a later fix now reports these as `not_available`, so the two lists above would shift if rerun |
+| Official identity, accounts, filing history, leadership, dated activity | 100% available |
+| Registered workplaces | about 80% available; the rest have no registered sub-unit |
+| Verified official websites | **6 of 100**: 4 by organisation number on the page, 1 by registry site + name, 1 by name + postal code. All checked by hand and correct |
+| Website candidates refused as `ambiguous` | 12: shared domains, another organisation's number on the page, or no anchor |
+| Hiring from NAV | 1 company (3 active ads). Hand-verified: the ads' employer number is a registered sub-unit of the company, same municipality |
+| Runtime effect of concurrency | 18 min sequential to 4 min 22 s with 6 workers, with identical outcomes |
 | Rerun on unchanged sources | 0 changes (8 live companies, official-data families only) |
 
-The first live run found six defects, all fixed and covered by regression tests: an
-extractor crash on comments outside `<html>`, a website crash discarding official data, an
-unreachable host mislabelled as a robots block, an empty placeholder accepted as a verified
-site, unrelated social links accepted, and dead domains reported as `failed`.
+Every live run found defects that the simulated tests could not, all now fixed and covered by
+regression tests: an extractor crash on comments outside `<html>`; a website crash discarding
+official data; an unreachable host mislabelled as a robots block; an empty placeholder accepted as
+a verified site; unrelated social links accepted; dead domains reported as `failed`; a robots block
+reported for a domain that was only a guess; the NAV feed's 404-means-up-to-date quirk; and a race
+that let concurrent requests overshoot the budget.
 
 ---
 
@@ -506,19 +525,19 @@ site, unrelated social links accepted, and dead domains reported as `failed`.
 
 Stated plainly, because a wrong claim is worse than a missing one:
 
-- **Website coverage is low, about 3% on a random batch.** Only about 11% of companies have a
-  registry website, about 30% have a company-domain email (from an 80-company sample), and the shared-domain rule
-  correctly refuses the many that use a manager's or parent's domain. Companies with neither
-  are not researched yet.
-- **No job-ad feed and no dated activity yet.** `hiring` reads only structured job postings
-  and careers pages on a verified site. There is no NAV feed, no news extraction and no
-  registry change-event feed.
+- **Website coverage is low, about 6% on a random batch.** Only about 11% of companies have a
+  registry website and about 30% a company-domain email (from an 80-company sample); the shared-domain
+  rule correctly refuses the many that use a manager's or parent's domain, and name-derived discovery
+  verifies only on a hard anchor. Most small companies have no findable website at all.
+- **Hiring coverage is low.** It comes from NAV ads that name the company as employer and from structured
+  postings on a verified site. Employers that advertise under a brand or group name different from their
+  legal name are not nominated by the NAV index.
+- **The NAV index is a snapshot.** It was built on 2026-09-26. Each run catches up from that date (about
+  three requests per day of age) and refuses to report a possibly-stale list if the catch-up cannot finish.
+  Rebuild it shortly before the final submission (see [NAV job ads](#nav-job-ads)).
+- **No dated activity from company news pages yet.** Dated activity comes from registry records only.
 - **No JavaScript rendering.** Pages that need a browser to show any content yield little text.
   A page with a good static title still verifies; a bare shell does not.
-- **Processing is sequential.** Fast enough for 100 companies, but not tuned for scale.
-- **No request-budget planner.** Website research is bounded per company, but nothing yet
-  reserves budget for the official data of later companies. At about 6 requests per company
-  it has ample headroom today.
 - **Accounts come from the registry's normalised API only.** Annual-account PDFs are linked,
   not parsed. The accounts endpoint returns recent periods, so long numeric history is not
   extracted.
@@ -526,6 +545,8 @@ Stated plainly, because a wrong claim is worse than a missing one:
   branches (NUF) or names in other scripts.
 - **The User-Agent contains a placeholder contact URL.** Replace it with the project's
   repository URL before official submission (`USER_AGENT` in [`net.py`](src/signalpost/net.py)).
+- **NAV's terms of use.** The feed is read with its documented public token. NAV asks integrators to
+  agree to its terms of use (and offers a registered token); do this before relying on it in production.
 - **Nothing here is an evaluator score.** The pooled reference collection, field weights and
   scoring are Builderr's; this repository has only been measured against its own tests and
   hand-audited live output.
@@ -536,20 +557,16 @@ Stated plainly, because a wrong claim is worse than a missing one:
 
 In priority order:
 
-1. **Candidate discovery** for companies with no registry website or email domain: name-derived
-   domains, accepted only on P1 or P4 proof.
-2. **NAV public job feed**, matched by exact employer organisation number.
-3. **Dated public activity** from the registry's change-event feed, plus dated items on company
-   news pages.
-4. **Request-budget planner** so that website research can never starve later companies of
-   official data.
-5. **Company briefing**: a deterministic, source-cited summary of what the company does, who
+1. **More website coverage, safely**: brand-name matching from leaders' public roles, and candidate
+   generation beyond name-derived domains, keeping the same hard-anchor verification.
+2. **Dated activity from company news pages** (dates parsed from feeds, JSON-LD and page markup).
+3. **Company briefing**: a deterministic, source-cited summary of what the company does, who
    runs it, its latest numbers, hiring, what changed and what is unknown.
-6. **Static viewer** for browsing and verifying profiles on desktop and mobile.
-7. **Hand-labelled gold set** with a promotion gate: no change ships unless it adds no wrong-company
+4. **Static viewer** for browsing and verifying profiles on desktop and mobile.
+5. **Hand-labelled gold set** with a promotion gate: no change ships unless it adds no wrong-company
    publication and no drop in precision.
-8. **Submission artifact**: 1,000 completed profiles with their organisation-number manifest.
-9. Repository docs for the submission: `AGENT.md`, `CRAWLERS.md`, `IDENTITY_RESOLUTION.md`,
+6. **Submission artifact**: 1,000 completed profiles with their organisation-number manifest.
+7. Repository docs for the submission: `AGENT.md`, `CRAWLERS.md`, `IDENTITY_RESOLUTION.md`,
    `DATA_SCHEMA.md`, `REFRESH.md`, `EVAL.md`, `LIMITATIONS.md`.
 
 The full analysis behind these choices, including the scoring rubric and the observation
@@ -562,10 +579,16 @@ that 85% of the universe reports no employees, is in [`PLAN.md`](PLAN.md).
 - **Models and third-party APIs:** none. No LLM, no search API, no paid service.
 - **Expected cost per 100-company batch:** $0.
 - **Secrets:** none required or read from the environment.
-- **Declared cache:** [`data/domain_multiplicity.json.gz`](data/domain_multiplicity.json.gz), built
-  from the public Brønnøysund bulk file. It is used only to *refuse* shared domains. It never
-  supplies a fact or a candidate, and every published fact is fetched live during the run.
-- **Data licences:** Brønnøysundregistrene open data under NLOD 2.0. Company websites are read
-  only where `robots.txt` allows, and only to extract facts the company itself publishes.
+- **Declared caches (both in `data/`, both rebuildable with scripts in `scripts/`):**
+  - [`domain_multiplicity.json.gz`](data/domain_multiplicity.json.gz), built from the public Brønnøysund
+    bulk file. It is used only to *refuse* shared domains and never supplies a fact or a candidate.
+  - [`nav_jobs_index.json.gz`](data/nav_jobs_index.json.gz), built from NAV's public job feed. It only
+    *nominates* ads by employer name. Every published job is fetched live during the run and kept only if
+    the ad's own employer organisation number matches the company or one of its registered sub-units.
+
+  Every published fact is therefore fetched live during the run; the caches never substitute for evidence.
+- **Data licences:** Brønnøysundregistrene open data under NLOD 2.0. NAV's public job feed is read with
+  its documented public token (NAV's terms of use apply). Company websites are read only where
+  `robots.txt` allows, and only to extract facts the company itself publishes.
 - **Personal data:** person names appear only as registry role holders (a public register);
   birth dates are discarded. Contact details are those a company publishes on its own site.

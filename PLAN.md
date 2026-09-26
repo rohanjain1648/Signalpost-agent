@@ -1,24 +1,24 @@
 # Signalpost: research findings and build plan
 
-## Build status (updated 2026-09-26, evening)
+## Build status (updated 2026-09-26, late evening)
 
-**Done, all test-first (174 tests):** envelope schema; counted, SSRF-guarded HTTP client (every redirect hop counted
-and checked; per-endpoint throttle); RFC 9309 robots handling on every hop; BRREG official modules (identity, accounts +
-period, filing history, leadership, workplaces, group); deterministic page extraction (JSON-LD, socials, contacts, jobs,
-priority links); tiered identity engine (P1-P4 / related / ambiguous / placeholder); shared-domain table shipped in
-`data/` (18,854 domains from the BRREG bulk file); website families with page-level evidence; refresh ledger;
-exactly-N-envelopes runner; `uv run signalpost --input ... --output ...`.
+**Done, all test-first (247 tests):** everything in the previous status, plus candidate discovery (name-derived
+domains, DNS-first, verified only by org number or name + postal code; an unverifiable guess is plain not_available),
+NAV job feed (name index nominates, each ad verified live by its own employer org number incl. sub-units; 404-on-catch-up
+means up to date), dated activity from registry records, hiring merge with ledger families that cannot close each other,
+concurrency (`--workers`), atomic request budget, soft (skip web/NAV) and hard (stop starting companies) time budgets.
 
-**Live results (same 100 random companies, real registry + real sites):** 100/100 completed, ~596 requests of 2,000,
-~4.5 min of 45. Official families 99-100%. Websites verified for 3 of 100 (all hand-checked correct); 14 refused as shared
-or other-org; the rest have no candidate. Audit-driven fixes so far: extractor crash on comments outside `<html>`, web crash
-no longer discards official data, unreachable host no longer read as a robots disallow, www/http fallbacks, placeholder
-pages, hostname-only titles, social-profile relevance gate, honest not_available states.
+**Live results, same 100 random companies:** 100/100 completed, 651 requests of 2,000, 3m54s of 45 (6 workers). Verified
+websites 6/100 (all hand-checked correct: 4 by org number, 1 registry site + name, 1 name + postal code). NAV: 1 company,
+3 ads, hand-verified as a registered sub-unit. Official families 100%.
 
-**Biggest remaining gap is coverage, not precision:** ~77% of companies have no website candidate at all. Next: candidate
-discovery (name-derived domains verified only by P1/P4), NAV job feed keyed by org number, BRREG change events as dated
-activity, request-budget planner (reserve official budget), briefing text, static site, gold set, docs, 1,000-profile artifact.
+**Every live run found bugs the simulated tests could not** (extractor crash, robots mislabels, placeholder accepted,
+budget race, NAV 404 quirk, ...). Keep auditing live output by hand.
 
+**Still open:** website/hiring coverage is low (most small companies have no findable site); dated activity from news
+pages; briefing text; static viewer; gold set; docs set; 1,000-profile artifact; NAV index rebuild before final freeze;
+real contact URL in the User-Agent; NAV terms-of-use/registered token; email to Builderr (keys, cache, previous-state,
+DNS counting, family weights).
 ---
 
 ## 1. What the research found
