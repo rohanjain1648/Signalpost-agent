@@ -223,3 +223,39 @@ def test_social_and_platform_hosts_are_never_website_candidates():
 def test_a_platform_host_does_not_hide_a_real_email_domain_candidate():
     entity = {**ENTITY, "website": "https://www.facebook.com/x", "email": "post@sandneselektriske.no"}
     assert candidate_domains(entity) == [("sandneselektriske.no", "email_domain")]
+
+
+# ---- placeholders and titles that merely echo the domain ------------------------
+
+LIIVAT = {**ENTITY, "organisation_number": "935835119", "name": "LIIVAT AS", "email": "info@liivat.no",
+          "postal_code": "5000"}
+
+
+def test_placeholder_pages_are_ambiguous_even_when_the_domain_matches_the_name():
+    for text in ("This is the future home of: www.liivat.no", "Coming soon", "Under construction",
+                 "Nettsiden er under utvikling", "Kommer snart", "Welcome to nginx!",
+                 "Apache2 Ubuntu Default Page: It works", "Default Web Site Page", "Index of /"):
+        result = assess_site(
+            LIIVAT, page(title="liivat.no", text=text, final_url="https://liivat.no/"),
+            "email_domain", {}
+        )
+        assert result["status"] == "ambiguous", text
+
+
+def test_a_title_that_only_echoes_the_hostname_is_not_identity_evidence():
+    result = assess_site(
+        LIIVAT,
+        page(title="www.liivat.no", text="Velkommen. Vi leverer tjenester til bedrifter i hele landet.",
+             final_url="https://liivat.no/"),
+        "email_domain", {},
+    )
+    assert result["status"] != "exact"
+
+
+def test_a_real_title_with_the_name_still_verifies():
+    result = assess_site(
+        LIIVAT,
+        page(title="Liivat - regnskap og rådgivning", text="Velkommen til Liivat.", final_url="https://liivat.no/"),
+        "email_domain", {},
+    )
+    assert result["status"] == "exact"

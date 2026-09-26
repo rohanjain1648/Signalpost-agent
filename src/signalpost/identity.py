@@ -42,7 +42,13 @@ PLATFORM_DOMAINS = {
 PARKED_MARKERS = (
     "domain is for sale", "domain for sale", "this domain may be for sale", "hugedomains",
     "parked at", "buy this domain", "domenet er til salgs", "her flytter snart en ny gjest",
+    # empty placeholders and unconfigured servers: the domain exists, but there is no company site
+    "future home of", "coming soon", "under construction", "under utvikling", "kommer snart",
+    "welcome to nginx", "default web site page", "apache2 ubuntu default page", "apache2 debian default page",
+    "it works!", "index of /", "test page for the apache", "web server is working",
 )
+
+_HOSTNAME_TITLE = re.compile(r"(?:https?://)?(?:www\.)?[\w-]+(?:\.[\w-]+)*\.[a-z]{2,}/?", re.IGNORECASE)
 
 _ORG_LABELLED = re.compile(
     r"(?:org(?:anisasjons)?\.?\s*(?:nr|nummer)\.?|orgnr|foretaksregisteret)\s*[:.]?\s*"
@@ -135,6 +141,8 @@ def assess_site(
 ) -> dict[str, Any]:
     org = re.sub(r"\D", "", str(entity.get("organisation_number") or ""))
     title = str(page.get("title") or "")
+    if _HOSTNAME_TITLE.fullmatch(title.strip()):
+        title = ""  # a title that merely echoes the hostname says nothing about who owns the site
     text = str(page.get("text") or "")
     structured = " ".join(str(n) for n in page.get("structured_names") or [])
     host = _host(page.get("final_url"))
