@@ -114,3 +114,42 @@ def test_cli_state_dir_makes_second_run_report_no_changes(tmp_path):
 def test_cli_rejects_input_with_invalid_organisation_number(tmp_path):
     with pytest.raises(ValueError, match="9 digits"):
         run_cli(tmp_path, ["12345"])
+
+
+# ---- website research flags ----------------------------------------------------
+
+
+def _claims(path):
+    return {c["field"]: c for c in read_jsonl(path)[0]["claims"]}
+
+
+def test_website_families_are_researched_by_default(tmp_path):
+    _, out = run_cli(tmp_path, [GOOD], extra=("--domain-table", str(tmp_path / "missing.json.gz")))
+    assert "official_website" in _claims(out)
+
+
+def test_no_web_flag_skips_website_families_and_site_requests(tmp_path):
+    _, out = run_cli(tmp_path, [GOOD], extra=("--no-web",))
+    assert "official_website" not in _claims(out)
+    report = json.loads(Path(str(out) + ".report.json").read_text(encoding="utf-8"))
+    assert report["web_enabled"] is False
+    assert report["requests"] == 5
+
+
+def test_report_says_when_the_domain_table_is_missing_and_warns(tmp_path, capsys):
+    _, out = run_cli(tmp_path, [GOOD], extra=("--domain-table", str(tmp_path / "missing.json.gz")))
+    report = json.loads(Path(str(out) + ".report.json").read_text(encoding="utf-8"))
+    assert report["web_enabled"] is True
+    assert report["domain_table_loaded"] is False
+    assert "domain table" in capsys.readouterr().err.lower()
+
+
+def test_report_records_a_loaded_domain_table(tmp_path):
+    from signalpost.domains import save_table
+
+    table = tmp_path / "table.json.gz"
+    save_table({"shared.no": 3}, table)
+    _, out = run_cli(tmp_path, [GOOD], extra=("--domain-table", str(table)))
+    report = json.loads(Path(str(out) + ".report.json").read_text(encoding="utf-8"))
+    assert report["domain_table_loaded"] is True
+    assert report["domain_table_shared_domains"] == 1

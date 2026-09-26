@@ -31,6 +31,7 @@ class Claim(BaseModel):
     confidence: float | None = None
     evidence_ids: list[str] = Field(default_factory=list)
     as_of: str | None = None
+    note: str | None = None
 
 
 class Evidence(BaseModel):

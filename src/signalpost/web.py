@@ -82,7 +82,7 @@ def _empty(status: str, candidates: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "status": status, "candidates": candidates, "proof": None, "homepage": None, "pages": [],
         "socials": [], "emails": [], "phones": [], "jobs": [], "careers_links": [], "news_links": [],
-        "structured_organizations": [],
+        "structured_organizations": [], "contact_sources": {}, "careers_checked": False,
     }
 
 
@@ -94,10 +94,11 @@ def _fan_out(home: FetchResult, home_extract: dict[str, Any], client: CountingCl
         for social in extraction["socials"]:
             if not any(s["platform"] == social["platform"] and s["url"] == social["url"] for s in result["socials"]):
                 result["socials"].append({**social, "page_url": page_url})
-        for key in ("emails", "phones"):
+        for key, prefix in (("emails", "email"), ("phones", "phone")):
             for value in extraction[key]:
                 if value not in result[key] and (key == "phones" or _keep_email(value, home_host)):
                     result[key].append(value)
+                    result["contact_sources"][f"{prefix}:{value}"] = page_url
         for job in extraction["jobs"]:
             result["jobs"].append({**job, "page_url": page_url})
         result["structured_organizations"].extend(extraction["organizations"])
@@ -123,6 +124,8 @@ def _fan_out(home: FetchResult, home_extract: dict[str, Any], client: CountingCl
             continue  # a redirect must never carry us off the verified site
         extraction = extract_page(page.text or "", page.final_url or url)
         result["pages"].append({**_evidence(page), "kind": kind, "title": extraction["title"]})
+        if kind == "careers":
+            result["careers_checked"] = True
         merge(extraction, page.final_url or url)
 
 
@@ -140,7 +143,10 @@ def research_website(
         if multiplicity is None:
             candidate = {**candidate, "source": "unchecked_" + candidate["source"]}
         fetch = client.fetch_page(candidate["url"], allow=robots.allowed)
-        record: dict[str, Any] = {**candidate, "final_url": fetch.final_url}
+        record: dict[str, Any] = {
+            **candidate, "final_url": fetch.final_url, "retrieved_at": fetch.retrieved_at,
+            "content_sha256": fetch.content_sha256,
+        }
         failure = _fetch_outcome(fetch)
         if failure:
             record["outcome"], record["reason"] = failure

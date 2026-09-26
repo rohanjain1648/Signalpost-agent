@@ -8,6 +8,7 @@ observations so refreshes report only real changes.
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -16,6 +17,9 @@ from .ledger import apply_observations
 from .models import Claim, Envelope, Evidence
 from .net import CountingClient
 from .official import BRREG_ACCOUNT_PDF
+from .robots import RobotsCache
+from .site_claims import build_site_output, entity_unavailable_claims
+from .web import research_website
 
 EXTRACTOR = "brreg-json/1"
 OFFICIAL_MODULES = {"registry_live", "financials", "financial_history", "roles", "locations"}
@@ -34,6 +38,14 @@ LEDGER_FAMILY = {
     "locations": "locations",
 }
 FINANCIAL_METRICS = ("revenue", "operating_result", "profit_before_tax", "annual_result", "assets", "equity", "debt")
+
+
+@dataclass
+class WebResearch:
+    """Website-research settings. `multiplicity=None` means no domain table: domains are unchecked."""
+    robots: RobotsCache
+    multiplicity: dict[str, int] | None
+    max_pages: int = 4
 
 
 def _utc_now() -> str:
@@ -134,6 +146,7 @@ def process_company(
     run_id: str,
     run_ts: str,
     prev_state: dict[str, dict[str, Any]],
+    web: WebResearch | None = None,
 ) -> tuple[Envelope, dict[str, dict[str, Any]]]:
     started = time.monotonic()
     requests_before = client.requests_made
@@ -175,8 +188,20 @@ def process_company(
         if m in LEDGER_FAMILY and r["status"] in {"available", "not_found"}
     } - {"financials"}  # the accounts endpoint only returns recent periods: older ones are never "withdrawn"
     failed = {LEDGER_FAMILY[m] for m, r in modules.items() if m in LEDGER_FAMILY and r["status"] == "source_error"}
+    observations = _observations(org, modules)
+    if web is not None:
+        if entity["status"] == "available":
+            site = build_site_output(research_website(
+                entity["value"], client, web.robots, web.multiplicity, max_pages=web.max_pages))
+            claims.extend(site.claims)
+            evidence.extend(site.evidence)
+            observations.extend(site.observations)
+            checked |= site.checked
+            failed |= site.failed
+        else:
+            claims.extend(entity_unavailable_claims(entity["status"]))
     state, changes = apply_observations(
-        org, prev_state, _observations(org, modules),
+        org, prev_state, observations,
         run_ts=run_ts, checked_families=checked, failed_families=failed,
     )
 

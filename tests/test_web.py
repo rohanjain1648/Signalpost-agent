@@ -175,3 +175,18 @@ def test_without_a_multiplicity_table_a_structured_org_number_still_verifies():
     result = research_website(ENTITY, client, robots, None)
     assert result["status"] == "available"
     assert result["proof"]["tier"] == "P1"
+
+
+def test_each_contact_value_records_the_page_it_was_found_on():
+    result, _, _ = run()
+    assert result["contact_sources"]["email:post@sandneselektriske.no"] == f"{HOST}/kontakt"
+
+
+def test_careers_checked_is_true_only_when_the_careers_page_was_actually_read():
+    result, _, _ = run()
+    assert result["careers_checked"] is True
+
+    result, _, _ = run(client_bundle=site({f"{HOST}/karriere": (503, "")}))
+    assert result["status"] == "available"
+    assert result["careers_checked"] is False
+    assert result["jobs"] == []

@@ -101,3 +101,12 @@ def test_envelope_serializes_the_contract_shape():
     assert body["claims"][0]["evidence_ids"] == ["ev-1"]
     assert body["changes"] == []
     assert body["errors"] == []
+
+
+def test_claim_can_carry_a_note_explaining_a_non_available_state():
+    claim = Claim(
+        field="official_website", value=None, availability="ambiguous",
+        note="candidate domain is shared by 40 registry entities",
+    )
+    assert claim.note.startswith("candidate domain")
+    assert Claim(field="x", availability="available").note is None
