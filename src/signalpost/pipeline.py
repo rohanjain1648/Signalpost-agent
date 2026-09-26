@@ -18,7 +18,7 @@ from .models import Claim, Envelope, Evidence
 from .net import CountingClient
 from .official import BRREG_ACCOUNT_PDF
 from .robots import RobotsCache
-from .site_claims import build_site_output, entity_unavailable_claims
+from .site_claims import build_site_output, entity_unavailable_claims, failed_site_output
 from .web import research_website
 
 EXTRACTOR = "brreg-json/1"
@@ -191,8 +191,13 @@ def process_company(
     observations = _observations(org, modules)
     if web is not None:
         if entity["status"] == "available":
-            site = build_site_output(research_website(
-                entity["value"], client, web.robots, web.multiplicity, max_pages=web.max_pages))
+            try:
+                site = build_site_output(research_website(
+                    entity["value"], client, web.robots, web.multiplicity, max_pages=web.max_pages))
+            except Exception as exc:  # noqa: BLE001 - a website crash must never discard the official data
+                message = f"{type(exc).__name__}: {exc}"
+                errors.append({"module": "website", "type": "exception", "message": message})
+                site = failed_site_output(f"website research crashed ({message})")
             claims.extend(site.claims)
             evidence.extend(site.evidence)
             observations.extend(site.observations)

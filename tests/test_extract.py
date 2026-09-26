@@ -117,3 +117,19 @@ def test_malformed_json_ld_and_empty_documents_do_not_raise():
     assert p["organizations"] == [] and p["jobs"] == []
     empty = extract_page("", BASE)
     assert empty["title"] is None and empty["text"] == ""
+
+
+def test_documents_whose_root_is_a_removable_element_do_not_raise():
+    for html in ("<script>var a = 1;</script>", "<noscript>enable js</noscript>",
+                 "<template><script>x</script><noscript>y</noscript></template>",
+                 "<!-- only a comment -->", "<style>a{}</style>"):
+        p = extract_page(html, BASE)
+        assert p["text"] == "" or "var a" not in p["text"], html
+
+
+def test_comments_outside_the_html_element_do_not_crash_extraction():
+    # real-world trigger: top-level comments have no parent element, which made lxml's drop_tree assert
+    for html in ("<!-- saved from url --><html><body>hi</body></html>",
+                 "<!DOCTYPE html><!-- x --><html><body>hi</body></html>",
+                 "<html><body>hi</body></html><!-- trailing -->"):
+        assert extract_page(html, BASE)["text"] == "hi", html

@@ -245,8 +245,11 @@ def extract_page(html: str, base_url: str) -> dict[str, Any]:
         if org["telephone"]:
             phones.append(re.sub(r"[^\d+]", "", str(org["telephone"])))
 
+    if doc.tag in {"script", "style", "noscript", "template"}:
+        return result  # the whole document is non-visible markup
     for bad in doc.xpath("//script|//style|//noscript|//template|//comment()"):
-        bad.drop_tree()
+        if bad.getparent() is not None:  # comments outside <html> have no parent: leave them, they are not text
+            bad.drop_tree()
     text = " ".join(" ".join(doc.itertext()).split())[:MAX_TEXT_CHARS]
     for found in EMAIL_RE.findall(text):
         if not found.lower().endswith(IMAGE_SUFFIXES):

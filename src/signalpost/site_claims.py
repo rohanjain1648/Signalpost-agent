@@ -34,6 +34,14 @@ def entity_unavailable_claims(entity_status: str) -> list[Claim]:
                   note="registry entity could not be read") for name in WEB_FIELDS]
 
 
+def failed_site_output(note: str) -> SiteOutput:
+    """Website research crashed: report every website family as failed and leave the ledger stale."""
+    out = SiteOutput(failed=set(WEB_FAMILIES))
+    out.claims = [Claim(field=name, availability="failed", evidence_ids=[REGISTRY_EVIDENCE], note=note)
+                  for name in WEB_FIELDS]
+    return out
+
+
 def _domain(url: str) -> str:
     host = (urllib.parse.urlparse(url).hostname or "").lower()
     return host.removeprefix("www.")

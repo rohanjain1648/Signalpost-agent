@@ -179,3 +179,22 @@ def test_entity_without_any_website_candidate_is_not_available_citing_the_regist
     site = by_field(envelope)["official_website"]
     assert site.availability == "not_available"
     assert site.evidence_ids == ["ev-registry_live"]
+
+
+def test_a_crash_in_website_research_never_discards_the_official_data(monkeypatch):
+    import signalpost.pipeline as pipeline
+
+    def boom(*args, **kwargs):
+        raise AssertionError("parser exploded")
+
+    monkeypatch.setattr(pipeline, "research_website", boom)
+    envelope, state = run(make())
+    claims = by_field(envelope)
+    assert claims["legal_identity"].availability == "available"
+    assert claims["leadership"].availability == "available"
+    for field in ("official_website", "brand_name", "company_profiles", "contact", "hiring"):
+        assert claims[field].availability == "failed", field
+    assert envelope.errors[-1]["module"] == "website"
+    assert "parser exploded" in envelope.errors[-1]["message"]
+    assert envelope.run.terminal_status == "completed"
+    assert any(c["family"] == "roles" for c in state.values())
