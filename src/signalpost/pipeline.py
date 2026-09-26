@@ -13,8 +13,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .fetch import fetch_official_modules
+from .hiring import merge_hiring
 from .ledger import apply_observations
 from .models import Claim, Envelope, Evidence
+from .nav import NavJobs
 from .net import CountingClient
 from .official import BRREG_ACCOUNT_PDF
 from .robots import RobotsCache
@@ -190,6 +192,30 @@ def _activity_observations(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     } for i in items]
 
 
+def _add_nav_jobs(org, entity, modules, nav, claims, evidence, observations, checked, failed, errors) -> None:
+    """Look up NAV ads for this company and merge them into the `hiring` claim."""
+    numbers = {org} | {loc["organisation_number"] for loc in
+                       (modules.get("locations", {}).get("value") or {}).get("locations", [])
+                       if loc.get("organisation_number")}
+    try:
+        result = nav.jobs_for(entity, numbers)
+    except Exception as exc:  # noqa: BLE001 - a NAV problem must never discard the other families
+        message = f"{type(exc).__name__}: {exc}"
+        errors.append({"module": "nav_jobs", "type": "exception", "message": message})
+        result = {"status": "failed", "jobs": [], "rejected": 0, "incomplete": True, "evidence": {}, "note": message}
+    position = next((i for i, c in enumerate(claims) if c.field == "hiring"), None)
+    merged = merge_hiring(claims[position] if position is not None else None, result)
+    if merged.claim is not None:
+        if position is None:
+            claims.append(merged.claim)
+        else:
+            claims[position] = merged.claim
+    evidence.extend(merged.evidence)
+    observations.extend(merged.observations)
+    checked |= merged.checked
+    failed |= merged.failed
+
+
 def process_company(
     org: str,
     client: CountingClient,
@@ -198,6 +224,7 @@ def process_company(
     run_ts: str,
     prev_state: dict[str, dict[str, Any]],
     web: WebResearch | None = None,
+    nav: NavJobs | None = None,
 ) -> tuple[Envelope, dict[str, dict[str, Any]]]:
     started = time.monotonic()
     requests_before = client.requests_made
@@ -263,6 +290,8 @@ def process_company(
             failed |= site.failed
         else:
             claims.extend(entity_unavailable_claims(entity["status"]))
+    if nav is not None and entity["status"] == "available":
+        _add_nav_jobs(org, entity["value"], modules, nav, claims, evidence, observations, checked, failed, errors)
     state, changes = apply_observations(
         org, prev_state, observations,
         run_ts=run_ts, checked_families=checked, failed_families=failed,

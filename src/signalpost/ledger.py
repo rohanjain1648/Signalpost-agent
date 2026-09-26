@@ -16,18 +16,18 @@ import json
 from typing import Any
 
 NEW = {
-    "jobs": "new_job", "roles": "new_role", "locations": "new_location",
+    "jobs": "new_job", "nav_jobs": "new_job", "roles": "new_role", "locations": "new_location",
     "financials": "new_filing", "activity": "new_activity", "website": "new_website",
     "socials": "new_social_profile", "description": "new_description",
 }
 CHANGED = {
-    "jobs": "changed_job", "roles": "changed_role", "locations": "changed_location",
+    "jobs": "changed_job", "nav_jobs": "changed_job", "roles": "changed_role", "locations": "changed_location",
     "financials": "changed_financial", "activity": "changed_activity",
     "website": "website_changed", "socials": "changed_social_profile",
     "description": "changed_description",
 }
 CLOSED = {
-    "jobs": "closed_job", "roles": "ended_role", "locations": "closed_location",
+    "jobs": "closed_job", "nav_jobs": "closed_job", "roles": "ended_role", "locations": "closed_location",
     "financials": "withdrawn_filing", "activity": "closed_activity",
     "website": "website_removed", "socials": "removed_social_profile",
 }
