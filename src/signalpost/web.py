@@ -45,6 +45,27 @@ def _candidate_urls(entity: dict[str, Any]) -> list[dict[str, str]]:
     return out[:MAX_CANDIDATES]
 
 
+def _attempt_urls(url: str) -> list[str]:
+    """The URL as given, then one alternative: add `www.`, or (already www) fall back from https to http."""
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.netloc
+    if not host.lower().startswith("www."):
+        alt = urllib.parse.urlunparse(parsed._replace(netloc="www." + host))
+    elif parsed.scheme == "https":
+        alt = urllib.parse.urlunparse(parsed._replace(scheme="http"))
+    else:
+        return [url]
+    return [url, alt]
+
+
+def _unreachable(fetch: FetchResult) -> bool:
+    """True when the host could not be reached at all (worth trying the alternative URL)."""
+    error = fetch.error or ""
+    if fetch.status != 0 or error.startswith("blocked: robots"):
+        return False
+    return "did not resolve" in error or not error.startswith("blocked")
+
+
 def _fetch_outcome(fetch: FetchResult) -> tuple[str, str] | None:
     """Map a failed/unusable fetch to (outcome, reason); None means a usable HTML page."""
     error = fetch.error or ""
@@ -142,7 +163,11 @@ def research_website(
     for candidate in _candidate_urls(entity):
         if multiplicity is None:
             candidate = {**candidate, "source": "unchecked_" + candidate["source"]}
-        fetch = client.fetch_page(candidate["url"], allow=robots.allowed)
+        for attempt in _attempt_urls(candidate["url"]):
+            fetch = client.fetch_page(attempt, allow=robots.allowed)
+            candidate = {**candidate, "url": attempt}
+            if not _unreachable(fetch):
+                break
         record: dict[str, Any] = {
             **candidate, "final_url": fetch.final_url, "retrieved_at": fetch.retrieved_at,
             "content_sha256": fetch.content_sha256,

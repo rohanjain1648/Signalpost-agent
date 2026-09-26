@@ -10,6 +10,8 @@ def _client(routes):
         if route is None:
             return httpx.Response(404, text="")
         status, body = route
+        if status == "connect_error":
+            raise httpx.ConnectError("host unreachable")
         return httpx.Response(status, text=body, headers={"content-type": "text/plain"})
 
     return CountingClient(transport=httpx.MockTransport(handler), max_requests=50, resolver=lambda h: ["8.8.8.8"])
@@ -54,3 +56,8 @@ def test_hosts_are_cached_independently():
     robots = RobotsCache(client)
     assert robots.allowed("https://a.no/x") is False
     assert robots.allowed("https://b.no/x") is True
+
+
+def test_unreachable_host_is_not_a_disallow_so_the_page_fetch_can_fail_naturally():
+    robots = RobotsCache(_client({"https://a.no/robots.txt": ("connect_error", "")}))
+    assert robots.allowed("https://a.no/") is True

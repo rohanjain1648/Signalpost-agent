@@ -1,3 +1,5 @@
+import socket
+
 import httpx
 
 from signalpost.net import CountingClient
@@ -26,7 +28,7 @@ CAREERS = """<html><title>Karriere</title><script type="application/ld+json">
 NEWS = "<html><title>Nyheter</title><body>Ny avtale signert</body></html>"
 
 
-def site(overrides=None, robots="User-agent: *\nDisallow:\n"):
+def site(overrides=None, robots="User-agent: *\nDisallow:\n", unresolvable=()):
     routes = {
         f"{HOST}/robots.txt": (200, robots),
         f"{HOST}/": (200, HOME),
@@ -44,11 +46,18 @@ def site(overrides=None, robots="User-agent: *\nDisallow:\n"):
         if url not in routes:
             return httpx.Response(404, text="nope")
         status, body = routes[url]
+        if status == "connect_error":
+            raise httpx.ConnectError("connection refused")
         if status in (301, 302):
             return httpx.Response(status, headers={"location": body})
         return httpx.Response(status, text=body, headers={"content-type": "text/html; charset=utf-8"})
 
-    client = CountingClient(transport=httpx.MockTransport(handler), max_requests=100, resolver=lambda h: ["8.8.8.8"])
+    def resolver(host):
+        if host in unresolvable:
+            raise socket.gaierror("no such host")
+        return ["8.8.8.8"]
+
+    client = CountingClient(transport=httpx.MockTransport(handler), max_requests=100, resolver=resolver)
     return client, RobotsCache(client), seen
 
 
@@ -190,3 +199,54 @@ def test_careers_checked_is_true_only_when_the_careers_page_was_actually_read():
     assert result["status"] == "available"
     assert result["careers_checked"] is False
     assert result["jobs"] == []
+
+
+# ---- fallbacks: apex -> www, https -> http --------------------------------------
+
+
+EMAIL_ONLY = {**ENTITY, "website": None}
+
+
+def test_apex_domain_that_does_not_resolve_falls_back_to_www():
+    bundle = site(unresolvable={"sandneselektriske.no"})
+    result, _, seen = run(EMAIL_ONLY, client_bundle=bundle)
+    assert result["status"] == "available"
+    assert result["homepage"]["final_url"] == f"{HOST}/"
+    assert "https://sandneselektriske.no/" not in seen  # never requested: DNS failed first
+
+
+def test_apex_connection_error_falls_back_to_www():
+    bundle = site({"https://sandneselektriske.no/robots.txt": ("connect_error", ""),
+                   "https://sandneselektriske.no/": ("connect_error", "")})
+    result, _, _ = run(EMAIL_ONLY, client_bundle=bundle)
+    assert result["status"] == "available"
+
+
+def test_https_failure_on_a_www_site_falls_back_to_http():
+    entity = {**ENTITY, "website": "www.sandneselektriske.no"}
+    bundle = site({
+        f"{HOST}/robots.txt": ("connect_error", ""), f"{HOST}/": ("connect_error", ""),
+        "http://www.sandneselektriske.no/robots.txt": (200, "User-agent: *\nDisallow:\n"),
+        "http://www.sandneselektriske.no/": (200, HOME),
+    })
+    result, _, _ = run(entity, client_bundle=bundle)
+    assert result["status"] == "available"
+    assert result["homepage"]["final_url"] == "http://www.sandneselektriske.no/"
+
+
+def test_http_error_status_does_not_trigger_a_fallback():
+    bundle = site({"https://sandneselektriske.no/": (404, "")})
+    result, _, seen = run(EMAIL_ONLY, client_bundle=bundle)
+    assert result["status"] == "not_available"
+    assert not any(url.startswith(HOST) for url in seen)
+
+
+def test_nothing_reachable_is_failed_not_blocked():
+    bundle = site({
+        "https://sandneselektriske.no/robots.txt": ("connect_error", ""),
+        "https://sandneselektriske.no/": ("connect_error", ""),
+        f"{HOST}/robots.txt": ("connect_error", ""), f"{HOST}/": ("connect_error", ""),
+    })
+    result, _, _ = run(EMAIL_ONLY, client_bundle=bundle)
+    assert result["status"] in {"failed", "not_available"}
+    assert result["status"] != "blocked"
