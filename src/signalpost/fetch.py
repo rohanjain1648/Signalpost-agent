@@ -68,10 +68,9 @@ def fetch_official_modules(
     org: str, modules: set[str], client: CountingClient
 ) -> dict[str, dict[str, Any]]:
     records: dict[str, dict[str, Any]] = {}
-    for module in modules:
-        if module not in _ENDPOINTS:
+    for module, (url_template, source_class) in _ENDPOINTS.items():
+        if module not in modules:
             continue
-        url_template, source_class = _ENDPOINTS[module]
         url = url_template.format(org=org)
         result = client.fetch_json(url)
         status = _status_for(result)
