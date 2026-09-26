@@ -210,3 +210,38 @@ def test_quarantined_profiles_are_explained_in_the_claim_note_but_never_publishe
     assert "1 profile link" in claim.note and "could not be tied" in claim.note
     assert "somewebagency" not in envelope.model_dump_json()
     assert not any(c["family"] == "socials" for c in state.values())
+
+
+# ---- soft time budget --------------------------------------------------------------
+
+from signalpost.pipeline import TimeBudget  # noqa: E402
+
+
+def test_website_research_is_skipped_after_the_soft_deadline_but_official_data_is_kept():
+    bundle = make()
+    client, web, seen = bundle
+    envelope, state = process_company(ORG, client, run_id="r1", run_ts=T1, prev_state={}, web=web,
+                                      budget=TimeBudget(soft_deadline=5.0, clock=lambda: 10.0))
+    claims = by_field(envelope)
+    assert claims["legal_identity"].availability == "available"
+    for field in ("official_website", "brand_name", "company_profiles", "contact", "hiring"):
+        assert claims[field].availability == "failed", field
+        assert "time budget" in claims[field].note
+    assert not any(url.startswith(("https://www.sandneselektriske.no", "https://sandneselektriske.no")) for url in seen)
+
+
+def test_skipped_website_research_marks_prior_web_claims_stale_and_reports_no_change():
+    _, state1 = run(make(), ts=T1)
+    bundle = make()
+    envelope2, state2 = process_company(ORG, bundle[0], run_id="r1", run_ts=T2, prev_state=state1, web=bundle[1],
+                                        budget=TimeBudget(soft_deadline=5.0, clock=lambda: 10.0))
+    assert envelope2.changes == []
+    web_claims = [c for c in state2.values() if c["family"] in {"website", "socials", "jobs", "contact"}]
+    assert web_claims and all(c["status"] == "stale" for c in web_claims)
+
+
+def test_a_budget_that_has_not_expired_changes_nothing():
+    bundle = make()
+    envelope, _ = process_company(ORG, bundle[0], run_id="r1", run_ts=T1, prev_state={}, web=bundle[1],
+                                  budget=TimeBudget(soft_deadline=100.0, clock=lambda: 10.0))
+    assert by_field(envelope)["official_website"].availability == "available"

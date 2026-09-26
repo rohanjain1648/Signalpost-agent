@@ -10,7 +10,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from .fetch import fetch_official_modules
 from .hiring import merge_hiring
@@ -41,6 +41,16 @@ LEDGER_FAMILY = {
     "locations": "locations",
 }
 FINANCIAL_METRICS = ("revenue", "operating_result", "profit_before_tax", "annual_result", "assets", "equity", "debt")
+
+
+@dataclass
+class TimeBudget:
+    """Soft wall-clock budget: past it, expensive work (website, discovery, NAV) is skipped and reported."""
+    soft_deadline: float | None = None
+    clock: Callable[[], float] = time.monotonic
+
+    def expired(self) -> bool:
+        return self.soft_deadline is not None and self.clock() >= self.soft_deadline
 
 
 @dataclass
@@ -192,13 +202,18 @@ def _activity_observations(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     } for i in items]
 
 
-def _add_nav_jobs(org, entity, modules, nav, claims, evidence, observations, checked, failed, errors) -> None:
+def _add_nav_jobs(org, entity, modules, nav, claims, evidence, observations, checked, failed, errors,
+                  expired: bool = False) -> None:
     """Look up NAV ads for this company and merge them into the `hiring` claim."""
     numbers = {org} | {loc["organisation_number"] for loc in
                        (modules.get("locations", {}).get("value") or {}).get("locations", [])
                        if loc.get("organisation_number")}
     try:
-        result = nav.jobs_for(entity, numbers)
+        if expired:
+            result = {"status": "failed", "jobs": [], "rejected": 0, "incomplete": True, "evidence": {},
+                      "note": "NAV lookup skipped: time budget reached"}
+        else:
+            result = nav.jobs_for(entity, numbers)
     except Exception as exc:  # noqa: BLE001 - a NAV problem must never discard the other families
         message = f"{type(exc).__name__}: {exc}"
         errors.append({"module": "nav_jobs", "type": "exception", "message": message})
@@ -225,6 +240,7 @@ def process_company(
     prev_state: dict[str, dict[str, Any]],
     web: WebResearch | None = None,
     nav: NavJobs | None = None,
+    budget: TimeBudget | None = None,
 ) -> tuple[Envelope, dict[str, dict[str, Any]]]:
     started = time.monotonic()
     requests_before = client.requests_made
@@ -276,9 +292,12 @@ def process_company(
     if web is not None:
         if entity["status"] == "available":
             try:
-                site = build_site_output(research_website(
-                    entity["value"], client, web.robots, web.multiplicity, max_pages=web.max_pages,
-                    discover=web.discover))
+                if budget is not None and budget.expired():
+                    site = failed_site_output("website research skipped: time budget reached")
+                else:
+                    site = build_site_output(research_website(
+                        entity["value"], client, web.robots, web.multiplicity, max_pages=web.max_pages,
+                        discover=web.discover))
             except Exception as exc:  # noqa: BLE001 - a website crash must never discard the official data
                 message = f"{type(exc).__name__}: {exc}"
                 errors.append({"module": "website", "type": "exception", "message": message})
@@ -291,7 +310,8 @@ def process_company(
         else:
             claims.extend(entity_unavailable_claims(entity["status"]))
     if nav is not None and entity["status"] == "available":
-        _add_nav_jobs(org, entity["value"], modules, nav, claims, evidence, observations, checked, failed, errors)
+        _add_nav_jobs(org, entity["value"], modules, nav, claims, evidence, observations, checked, failed, errors,
+                      expired=budget is not None and budget.expired())
     state, changes = apply_observations(
         org, prev_state, observations,
         run_ts=run_ts, checked_families=checked, failed_families=failed,

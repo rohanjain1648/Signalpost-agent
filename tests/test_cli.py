@@ -240,3 +240,32 @@ def test_no_nav_flag_makes_no_feed_requests(tmp_path):
     claims, report = run_nav_cli(tmp_path, feed, extra=("--no-nav",))
     assert report["nav_enabled"] is False
     assert not any("pam-stilling-feed" in url for url, _, _ in feed.calls)
+
+
+# ---- workers and time budgets --------------------------------------------------------
+
+
+def test_workers_flag_processes_concurrently_and_keeps_input_order(tmp_path):
+    _, out = run_cli(tmp_path, [GOOD, BROKEN], extra=("--workers", "4", "--no-web"))
+    envelopes = read_jsonl(out)
+    assert [e["organisation_number"] for e in envelopes] == [GOOD, BROKEN]
+    report = json.loads(Path(str(out) + ".report.json").read_text(encoding="utf-8"))
+    assert report["workers"] == 4
+
+
+def test_hard_deadline_of_zero_yields_one_failed_envelope_per_company_and_exit_zero(tmp_path):
+    code, out = run_cli(tmp_path, [GOOD, BROKEN], extra=("--hard-deadline", "0"))
+    envelopes = read_jsonl(out)
+    assert code == 0 and len(envelopes) == 2
+    assert all(e["run"]["terminal_status"] == "failed" for e in envelopes)
+    assert envelopes[0]["errors"][0]["type"] == "TimeBudgetExhausted"
+
+
+def test_soft_deadline_of_zero_keeps_official_data_and_fails_the_website_families(tmp_path):
+    _, out = run_cli(tmp_path, [GOOD], extra=("--soft-deadline", "0"))
+    claims = _claims(out)
+    assert claims["legal_identity"]["availability"] == "available"
+    assert claims["official_website"]["availability"] == "failed"
+    assert "time budget" in claims["official_website"]["note"]
+    report = json.loads(Path(str(out) + ".report.json").read_text(encoding="utf-8"))
+    assert report["soft_deadline_seconds"] == 0.0

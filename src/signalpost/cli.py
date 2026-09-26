@@ -23,10 +23,13 @@ from .domains import load_table
 from .nav import NavJobs, load_index
 from .models import Envelope
 from .net import PRODUCTION_THROTTLES, CountingClient
-from .pipeline import WebResearch, process_company
+from .pipeline import TimeBudget, WebResearch, process_company
 from .robots import RobotsCache
 from .store import load_state, save_state
 
+DEFAULT_WORKERS = 6
+DEFAULT_SOFT_DEADLINE = 1500.0  # seconds: after this, skip website/discovery/NAV work (25 min)
+DEFAULT_HARD_DEADLINE = 2400.0  # seconds: after this, do not start further companies (40 min of the 45 allowed)
 DEFAULT_MAX_REQUESTS = 1900  # evaluator hard cap is 2,000 including redirects and retries
 DEFAULT_NAV_INDEX = str(Path(__file__).resolve().parents[2] / "data" / "nav_jobs_index.json.gz")
 DEFAULT_DOMAIN_TABLE = str(Path(__file__).resolve().parents[2] / "data" / "domain_multiplicity.json.gz")
@@ -48,6 +51,11 @@ def main(argv: Sequence[str] | None = None, *, client_factory: ClientFactory | N
     parser.add_argument("--domain-table", default=DEFAULT_DOMAIN_TABLE,
                         help="shared-domain table built from the BRREG bulk file (see scripts/build_domain_table.py)")
     parser.add_argument("--no-web", action="store_true", help="skip website research (official data only)")
+    parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS, help="companies processed concurrently")
+    parser.add_argument("--soft-deadline", type=float, default=DEFAULT_SOFT_DEADLINE,
+                        help="seconds after which website, discovery and NAV work is skipped")
+    parser.add_argument("--hard-deadline", type=float, default=DEFAULT_HARD_DEADLINE,
+                        help="seconds after which no further company is started (it becomes a failed envelope)")
     parser.add_argument("--nav-index", default=DEFAULT_NAV_INDEX,
                         help="NAV job-feed name index (see scripts/build_nav_index.py)")
     parser.add_argument("--no-nav", action="store_true", help="do not query the NAV job feed")
@@ -82,13 +90,16 @@ def main(argv: Sequence[str] | None = None, *, client_factory: ClientFactory | N
                 print(f"warning: NAV feed not ready ({nav_prepare.get('error')}); hiring will be reported as failed",
                       file=sys.stderr)
 
+    budget = TimeBudget(soft_deadline=started + args.soft_deadline)
+
     def worker(org: str) -> Envelope:
         prev = load_state(args.state_dir, org)
-        envelope, state = process_company(org, client, run_id=run_id, run_ts=run_ts, prev_state=prev, web=web, nav=nav)
+        envelope, state = process_company(org, client, run_id=run_id, run_ts=run_ts, prev_state=prev, web=web, nav=nav, budget=budget)
         save_state(args.state_dir, org, state)
         return envelope
 
-    envelopes = run_batch(orgs, worker=worker, run_id=run_id)
+    envelopes = run_batch(orgs, worker=worker, run_id=run_id, workers=args.workers,
+                          hard_deadline=started + args.hard_deadline)
     client.close()
 
     output = Path(args.output)
@@ -112,6 +123,9 @@ def main(argv: Sequence[str] | None = None, *, client_factory: ClientFactory | N
         "availability_counts": dict(sorted(availability.items())),
         "requests": client.requests_made,
         "max_requests": args.max_requests,
+        "workers": args.workers,
+        "soft_deadline_seconds": args.soft_deadline,
+        "hard_deadline_seconds": args.hard_deadline,
         "web_enabled": web is not None,
         "discovery_enabled": web is not None and web.discover,
         "dns_lookups": client.dns_lookups,

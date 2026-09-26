@@ -146,3 +146,16 @@ def test_without_nav_the_pipeline_is_unchanged_and_makes_no_feed_requests():
     client, _, _ = make(feed_with())
     envelope, _ = process_company(ORG, client, run_id="r1", run_ts=T1, prev_state={})
     assert "hiring" not in {c.field for c in envelope.claims}
+
+
+def test_nav_lookups_are_skipped_after_the_soft_deadline():
+    from signalpost.pipeline import TimeBudget
+
+    bundle = make(feed_with(detail("a1", ORG)))
+    client, nav, web = bundle
+    before = client.requests_made
+    envelope, _ = process_company(ORG, client, run_id="r1", run_ts=T1, prev_state={}, web=web, nav=nav,
+                                  budget=TimeBudget(soft_deadline=5.0, clock=lambda: 10.0))
+    claim = hiring(envelope)
+    assert claim.availability == "failed" and "time budget" in claim.note
+    assert client.requests_made - before == 5  # official only: no NAV ad lookups

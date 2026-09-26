@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -49,6 +51,10 @@ def read_organisation_numbers(path: str | Path) -> list[str]:
     return orgs
 
 
+class TimeBudgetExhausted(RuntimeError):
+    """The run's wall-clock budget ended before this company could be started."""
+
+
 def _failed_envelope(org: str, run_id: str, started_at: str, exc: Exception) -> Envelope:
     return Envelope(
         organisation_number=org,
@@ -62,17 +68,34 @@ def _failed_envelope(org: str, run_id: str, started_at: str, exc: Exception) -> 
     )
 
 
-def run_batch(orgs: list[str], *, worker: Worker, run_id: str) -> list[Envelope]:
-    """Call `worker(org)` for every org, in order, and always return len(orgs) envelopes.
+def run_batch(
+    orgs: list[str],
+    *,
+    worker: Worker,
+    run_id: str,
+    workers: int = 1,
+    hard_deadline: float | None = None,
+    clock: Callable[[], float] = time.monotonic,
+) -> list[Envelope]:
+    """Call `worker(org)` for every org and always return len(orgs) envelopes, in input order.
 
-    A worker exception never drops the company: it is converted into a
-    terminal `failed` envelope carrying the exception type and message.
+    * A worker exception never drops the company: it becomes a terminal `failed` envelope.
+    * `workers > 1` processes companies concurrently (results still come back in input order).
+    * A company that has not *started* by `hard_deadline` (a `clock()` value) is not processed:
+      it becomes a `failed` envelope saying the time budget ran out, so the run still finishes
+      inside the evaluator's wall-clock limit with one envelope per input.
     """
     started_at = _utc_now()
-    envelopes: list[Envelope] = []
-    for org in orgs:
+
+    def one(org: str) -> Envelope:
+        if hard_deadline is not None and clock() >= hard_deadline:
+            return _failed_envelope(org, run_id, started_at, TimeBudgetExhausted("hard time budget reached"))
         try:
-            envelopes.append(worker(org))
+            return worker(org)
         except Exception as exc:  # noqa: BLE001 - intentional: no company may be dropped
-            envelopes.append(_failed_envelope(org, run_id, started_at, exc))
-    return envelopes
+            return _failed_envelope(org, run_id, started_at, exc)
+
+    if workers <= 1:
+        return [one(org) for org in orgs]
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(one, orgs))
