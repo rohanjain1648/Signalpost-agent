@@ -73,8 +73,10 @@ def test_state_store_with_no_directory_is_a_noop(tmp_path):
 
 def run_cli(tmp_path, orgs, extra=()):
     out = tmp_path / "out" / "envelopes.jsonl"
+    # tests must not depend on the NAV index shipped in data/: disable it unless a test asks for NAV
+    isolate = () if any(flag in extra for flag in ("--no-nav", "--nav-index")) else ("--no-nav",)
     code = main(
-        ["--input", str(write_input(tmp_path, orgs)), "--output", str(out), "--run-id", "r1", *extra],
+        ["--input", str(write_input(tmp_path, orgs)), "--output", str(out), "--run-id", "r1", *isolate, *extra],
         client_factory=client_factory,
     )
     return code, out

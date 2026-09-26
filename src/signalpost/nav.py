@@ -108,7 +108,8 @@ class NavJobs:
         return {"Authorization": f"Bearer {self._token}", **(extra or {})}
 
     def prepare(self) -> dict[str, Any]:
-        summary: dict[str, Any] = {"ready": False, "pages": 0, "truncated": False, "added": 0, "removed": 0}
+        summary: dict[str, Any] = {"ready": False, "pages": 0, "truncated": False, "added": 0, "removed": 0,
+                                   "up_to_date": False}
         token = self.client.fetch_page(TOKEN_URL, max_bytes=20_000)
         candidates = [line.strip() for line in (token.text or "").splitlines() if line.strip().startswith("eyJ")]
         if token.status != 200 or not candidates:
@@ -127,6 +128,10 @@ class NavJobs:
                 summary["error"] = self.error
                 return summary
             page = self.client.fetch_json(url if url.startswith("http") else FEED_BASE + url, headers=headers)
+            if page.status == 404 and summary["pages"] == 0:
+                # The feed answers 404 when nothing changed since If-Modified-Since: the index is current.
+                summary["up_to_date"] = True
+                break
             if page.status != 200 or not isinstance(page.body, dict):
                 self.error = f"feed catch-up failed ({page.error or page.status})"
                 summary["error"] = self.error

@@ -220,3 +220,51 @@ def test_one_failed_lookup_does_not_hide_the_ads_that_did_load():
     assert [j["id"] for j in result["jobs"]] == ["a2"]
     assert result["status"] == "available"
     assert result["incomplete"] is True  # a1 could not be checked: never treat the list as complete
+
+
+# ---- the feed answers 404 when nothing changed since If-Modified-Since -------------
+
+
+def test_a_404_on_the_first_catch_up_request_means_nothing_changed_since_the_index_was_built():
+    feed = Feed()
+    original = feed.handler
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == f"{BASE}/api/v1/feed":
+            return httpx.Response(404, text="")
+        return original(request)
+
+    client = CountingClient(transport=httpx.MockTransport(handler), max_requests=50, resolver=lambda h: ["8.8.8.8"])
+    nav = NavJobs(NavIndex(built_at=BUILT, since="2026-03-26", by_name={"sandnes elektriske": ["a1"]}), client)
+    summary = nav.prepare()
+    assert summary["ready"] is True
+    assert summary["pages"] == 0 and summary["up_to_date"] is True
+    assert nav.index.by_name == {"sandnes elektriske": ["a1"]}
+
+
+def test_a_server_error_during_catch_up_is_not_mistaken_for_up_to_date():
+    feed = Feed()
+    original = feed.handler
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == f"{BASE}/api/v1/feed":
+            return httpx.Response(503, text="down")
+        return original(request)
+
+    client = CountingClient(transport=httpx.MockTransport(handler), max_requests=50, resolver=lambda h: ["8.8.8.8"])
+    nav = NavJobs(NavIndex(built_at=BUILT, since="2026-03-26", by_name={}), client)
+    assert nav.prepare()["ready"] is False
+
+
+def test_a_404_on_a_later_page_is_an_error_not_up_to_date():
+    feed = Feed(tail_pages=[[("n1", "ACTIVE", "X")], [("n2", "ACTIVE", "X")]])
+    original = feed.handler
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url).endswith("/api/v1/feed/1"):
+            return httpx.Response(404, text="")
+        return original(request)
+
+    client = CountingClient(transport=httpx.MockTransport(handler), max_requests=50, resolver=lambda h: ["8.8.8.8"])
+    nav = NavJobs(NavIndex(built_at=BUILT, since="2026-03-26", by_name={}), client)
+    assert nav.prepare()["ready"] is False

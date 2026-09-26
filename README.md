@@ -78,6 +78,12 @@ The exit code is `0` when the number of envelopes equals the number of inputs.
 | `--max-requests` | `1900` | Hard cap on outbound HTTP requests, redirects and retries included |
 | `--domain-table` | `data/domain_multiplicity.json.gz` | Shared-domain table (see [below](#how-a-website-is-verified)). Missing table = safe fallback, with a warning |
 | `--no-web` | off | Official registry data only; makes no request to any company website |
+| `--no-discovery` | off | Do not guess name-derived domains for companies without a registry website or email domain |
+| `--nav-index` | `data/nav_jobs_index.json.gz` | NAV job-feed name index (see [NAV jobs](#nav-job-ads)). Missing index = NAV disabled, with a warning |
+| `--no-nav` | off | Do not query the NAV job feed |
+| `--workers` | `6` | Companies processed concurrently. Output order always equals input order |
+| `--soft-deadline` | `1500` | Seconds after which website, discovery and NAV work is skipped (reported as `failed: time budget`); official data is still collected |
+| `--hard-deadline` | `2400` | Seconds after which no further company is *started*; each becomes a `failed` envelope, so the run still returns one envelope per input |
 
 Input is validated strictly: every entry must be exactly nine digits and duplicates are
 rejected, so a malformed batch fails loudly instead of silently dropping companies.
@@ -107,10 +113,12 @@ is empty.
 | Site fan-out: contact, about, careers and news pages; brand name; company-owned social profiles; contact details; structured job postings | Built, validated live |
 | Refresh ledger: stable claim IDs, idempotent reruns, typed changes, `stale` vs `closed` | Built, validated live |
 | robots.txt (RFC 9309) on every request hop; SSRF guard; request budget; per-endpoint throttle | Built, tested |
-| Discovery of websites for companies with no registry website or email domain | **Not built** |
-| Job ads from NAV's public feed; dated activity from registry change events | **Not built** |
+| Discovery of websites for companies with no registry website or email domain (name-derived domains, verified only by organisation number or name + postal code) | Built, validated live |
+| Job ads from NAV's public feed, attributed by organisation number | Built, tested; index build in progress |
+| Dated activity from registry records (articles, capital, employees, role changes) | Built, validated live |
+| Concurrent processing with soft and hard time budgets | Built, validated live |
 | Written company briefing; static viewer; hand-labelled gold set | **Not built** |
-| Request-budget planner that reserves official-data budget across a batch | **Not built** |
+| Dated activity from news pages on company sites | **Not built** |
 
 174 automated tests pass. Development was test-first: each behaviour was written as a
 failing test before its implementation.
@@ -219,10 +227,12 @@ of 0.
 | `brand_name` | `og:site_name` or JSON-LD organisation name | Never guessed from a page title |
 | `company_profiles` | Social links on the verified site | LinkedIn, Facebook, Instagram, X, YouTube, TikTok. Published only if the handle relates to the company |
 | `contact` | `mailto:`/`tel:` links and JSON-LD on the verified site | E-mail addresses on the company's own domain (or a free-mail domain) and phone numbers |
-| `hiring` | JSON-LD `JobPosting` markup and the careers page | Title, dates, location. If a careers page exists but publishes no structured postings, the claim says so |
+| `hiring` | NAV job feed (by organisation number) and JSON-LD `JobPosting` markup on the verified site | Title, published/expires dates, location, canonical URL. The same posting in both sources is listed once. If a careers page exists but publishes no structured postings, the claim says so |
+| `dated_activity` | The same registry records (no extra requests) | Dated official events, newest first: articles of association, share-capital registration, employee count registered, and changes to each role group (board, manager, auditor, accountant). `as_of` is the newest date |
 
 Website-derived claims mirror the website's state: if the site is `ambiguous`, so are
-brand, profiles, contact and hiring, with no values.
+brand, profiles and contact, with no values. `hiring` additionally draws on the NAV feed, which
+is attributed by organisation number and so does not depend on the website being verified.
 
 ---
 
@@ -265,6 +275,16 @@ Only `exact` is published. Rules that came from auditing live output:
   registry name, or the site declares it in JSON-LD `sameAs`. Otherwise it is quarantined and
   the claim note says how many links were held back. This keeps a web agency's or a partner's
   credit link out of the profile while accepting, for example, a firm's old-name Facebook page.
+- **Discovery.** For a company with no registry website and no company-domain email (about
+  three quarters of the universe), up to three name-derived `.no` domains are guessed
+  (`sandneselektriske.no`, `sandnes-elektriske.no`). Each is checked with a DNS lookup first, which is
+  not an HTTP request, and fetched only if it resolves. A guessed site is verified **only** by tier
+  P1 (organisation number on the page) or P4 (full name plus registered postal code), never by a
+  matching name alone. Companies that cannot have a site are skipped (co-ops, condominiums,
+  foundations, holding and property shells with no employees, numbered shells, names made only of
+  generic words). A guess that cannot be verified is reported as plain `not_available`: nothing ties
+  the domain to the company, so no claim is made about it. Guesses use a 6-second timeout. Discovery
+  never probes a domain that was already tried, and never works around a `robots.txt` block.
 - **Fan-out never leaves the verified site.** Pages found by fan-out are dropped if they
   redirect off-site (external applicant-tracking systems are allowed only for careers links).
 
@@ -307,9 +327,25 @@ State is kept per company in `--state-dir/<orgnr>.json` and managed by
 
 | Limit | Value | How it is respected |
 |---|---|---|
-| Requests per batch | 2,000, redirects and retries included | Every hop is counted by one client; hard cap defaults to 1,900 |
-| Wall clock | 45 minutes | A 100-company run takes about 4.5 minutes |
+| Requests per batch | 2,000, redirects and retries included | Every hop is counted by one client with an atomic reservation (safe under concurrency); hard cap defaults to 1,900 |
+| Wall clock | 45 minutes | Companies run concurrently; a soft deadline (25 min) skips website/NAV work and a hard deadline (40 min) stops starting companies, both reported explicitly |
 | Third-party API spend | $10 | The agent uses no paid API: $0 |
+
+### NAV job ads
+
+The NAV public job feed (`pam-stilling-feed.nav.no`) lists ads by *employer name* only; the organisation
+number is in each ad's detail record. So a name match only **nominates** an ad, and it is published only if
+the ad's own `employer.orgnr` equals the company (or one of its registered sub-units) and its status is
+`ACTIVE`. An ad from a namesake with a different number is rejected and never appears in the output.
+
+- **Offline index** (declared cache): `scripts/crawl_nav_feed.py` crawls the last six months of the feed's
+  change log (a resumable, roughly 30-minute job) and `scripts/build_nav_index.py` turns it into
+  `data/nav_jobs_index.json.gz`, a map from normalised employer name to active ad ids.
+- **At run start:** one request for the feed's documented public token, then a catch-up from the index's
+  build time using `If-Modified-Since` (about three requests per day of index age). If the catch-up
+  cannot finish, `hiring` is reported `failed` rather than trusting a stale list.
+- **Per company:** at most eight nominated ads are fetched live (one request each).
+- The bearer token is only ever sent to the feed's own host, never on a redirect to another host.
 
 ### Safety
 
@@ -332,7 +368,8 @@ State is kept per company in `--state-dir/<orgnr>.json` and managed by
 
 | Source | Use | Terms |
 |---|---|---|
-| Brønnøysundregistrene Enhetsregisteret and Regnskapsregisteret APIs and bulk file | Identity, accounts, roles, sub-units, groups, shared-domain table | Open data, NLOD 2.0 |
+| Brønnøysundregistrene Enhetsregisteret and Regnskapsregisteret APIs and bulk file | Identity, accounts, roles, sub-units, groups, dated activity, shared-domain table | Open data, NLOD 2.0 |
+| NAV Stillingsfeed (`pam-stilling-feed.nav.no`) | Job ads, attributed by employer organisation number | Documented public token; NAV's terms of use apply (see [Declarations](#declarations)) |
 | The company's own website (found via registry website or registry email domain) | Website, brand, profiles, contact, jobs | Fetched only when `robots.txt` permits |
 
 Search engines, LinkedIn, Meta, Glassdoor, Indeed and other restricted platforms are **not**
@@ -365,19 +402,21 @@ orgs.txt ──► batch.run_batch ───────────────
 | Module | Responsibility |
 |---|---|
 | [`models.py`](src/signalpost/models.py) | Pydantic `Claim`, `Evidence`, `Envelope`; the six availability states; nine-digit organisation-number validation |
-| [`net.py`](src/signalpost/net.py) | The only place HTTP happens. Request budget, safe-URL checks, manual redirect following, size cap, charset decoding, per-endpoint throttle, per-hop permission hook |
+| [`net.py`](src/signalpost/net.py) | The only place HTTP happens. Atomic request budget, safe-URL checks, manual redirect following, size cap, charset decoding, per-endpoint throttle, per-hop permission hook, per-call timeout, DNS-only `resolves()`, credential headers never forwarded cross-host |
 | [`robots.py`](src/signalpost/robots.py) | Per-origin robots cache using the counted client |
 | [`official.py`](src/signalpost/official.py) | Pure normalisers for registry JSON. No network, never invents a value |
 | [`fetch.py`](src/signalpost/fetch.py) | Fetch and normalise each registry module into `{status, value, evidence}` |
 | [`extract.py`](src/signalpost/extract.py) | Deterministic page extraction: JSON-LD, meta tags, mailto/tel, social links, priority links, job postings. Never raises on malformed HTML |
-| [`identity.py`](src/signalpost/identity.py) | Proof tiers, placeholder detection, shared-domain logic, social relevance |
+| [`identity.py`](src/signalpost/identity.py) | Proof tiers, placeholder detection, shared-domain logic, social relevance, name-derived domain guesses |
 | [`domains.py`](src/signalpost/domains.py) | Build, save and load the shared-domain table |
-| [`web.py`](src/signalpost/web.py) | Candidate → robots → fetch → identity gate → fan-out, with `www.`/`http` fallbacks |
+| [`web.py`](src/signalpost/web.py) | Candidate → robots → fetch → identity gate → fan-out, with `www.`/`http` fallbacks and name-derived discovery |
+| [`nav.py`](src/signalpost/nav.py) | NAV job feed: name index, run-start catch-up, per-ad verification by employer organisation number |
+| [`hiring.py`](src/signalpost/hiring.py) | Merge NAV and company-site postings into one `hiring` claim without duplicates |
 | [`site_claims.py`](src/signalpost/site_claims.py) | Turn a website result into claims, evidence and ledger observations |
 | [`ledger.py`](src/signalpost/ledger.py) | Claim IDs, idempotent upserts, typed changes |
 | [`store.py`](src/signalpost/store.py) | Atomic per-company state files |
-| [`pipeline.py`](src/signalpost/pipeline.py) | Per-company orchestration |
-| [`batch.py`](src/signalpost/batch.py) | Input parsing and the exactly-N-envelopes guarantee |
+| [`pipeline.py`](src/signalpost/pipeline.py) | Per-company orchestration, dated-activity events, soft time budget |
+| [`batch.py`](src/signalpost/batch.py) | Input parsing, concurrent processing in input order, the exactly-N-envelopes guarantee, and the hard deadline |
 | [`cli.py`](src/signalpost/cli.py) | The evaluator command and run report |
 
 Design rules, applied throughout:
@@ -395,8 +434,8 @@ Design rules, applied throughout:
 ```
 src/signalpost/      the agent (modules above)
 tests/               174 tests; fixtures/brreg/ holds real recorded registry responses
-data/                domain_multiplicity.json.gz, the shared-domain table
-scripts/             build_domain_table.py, rebuilds the table from the BRREG bulk file
+data/                domain_multiplicity.json.gz (shared domains), nav_jobs_index.json.gz (NAV employer-name index)
+scripts/             build_domain_table.py, crawl_nav_feed.py, build_nav_index.py: rebuild the two declared caches
 PLAN.md              research findings, scoring analysis, build plan and status
 pyproject.toml       dependencies (httpx, lxml, pydantic; pytest for development)
 uv.lock              pinned dependency versions
