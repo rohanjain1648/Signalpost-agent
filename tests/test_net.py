@@ -284,3 +284,55 @@ def test_custom_headers_are_not_forwarded_across_a_redirect_to_another_host():
     client = CountingClient(transport=httpx.MockTransport(handler), resolver=lambda h: ["8.8.8.8"])
     client.fetch_json("https://feed.example/api", headers={"Authorization": "Bearer secret"})
     assert hosts == [("feed.example", "Bearer secret"), ("other.example", None)]
+
+
+# ---- thread safety ---------------------------------------------------------------
+
+
+def test_concurrent_fetches_never_exceed_the_request_budget():
+    from concurrent.futures import ThreadPoolExecutor
+
+    import time
+
+    def slow_resolver(host):  # widens the window between the budget check and the increment
+        time.sleep(0.002)
+        return ["8.8.8.8"]
+
+    client = CountingClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})),
+                            max_requests=30, resolver=slow_resolver)
+
+    def call(i):
+        try:
+            client.fetch_json(f"https://example.no/{i}")
+            return "ok"
+        except BudgetExceeded:
+            return "budget"
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        outcomes = list(pool.map(call, range(120)))
+    assert outcomes.count("ok") == 30
+    assert client.requests_made == 30
+
+
+def test_budget_is_never_exceeded_even_when_threads_wait_on_a_throttle():
+    """The throttle wait sits between the budget check and the increment: the real race window."""
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    client = CountingClient(
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})), max_requests=10,
+        resolver=lambda h: ["8.8.8.8"], throttles={"/slow/": 0.003},
+        clock=time.monotonic, sleeper=time.sleep,
+    )
+
+    def call(i):
+        try:
+            client.fetch_json(f"https://example.no/slow/{i}")
+            return "ok"
+        except BudgetExceeded:
+            return "budget"
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        outcomes = list(pool.map(call, range(48)))
+    assert outcomes.count("ok") == 10
+    assert client.requests_made == 10

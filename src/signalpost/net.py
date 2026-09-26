@@ -123,6 +123,7 @@ class CountingClient:
         self.requests_made = 0
         self._raw_resolver = resolver
         self.dns_lookups = 0
+        self._count_lock = threading.Lock()
         self._throttles = throttles or {}
         self._clock = clock
         self._sleeper = sleeper
@@ -130,8 +131,16 @@ class CountingClient:
         self._last_request_at: dict[str, float] = {}
 
     def _resolver(self, host: str) -> list[str]:
-        self.dns_lookups += 1
+        with self._count_lock:
+            self.dns_lookups += 1
         return self._raw_resolver(host)
+
+    def _reserve_request(self, url: str) -> None:
+        """Atomically claim one unit of budget. Called last, right before the request is sent."""
+        with self._count_lock:
+            if self.requests_made >= self.max_requests:
+                raise BudgetExceeded(f"Request budget of {self.max_requests} exhausted before fetching {url!r}")
+            self.requests_made += 1
 
     def resolves(self, host: str) -> bool:
         """True if `host` resolves to public addresses only. A DNS lookup, not an HTTP request."""
@@ -180,10 +189,8 @@ class CountingClient:
                 return result(error=f"blocked: {exc}")
             if allow is not None and not allow(current):
                 return result(error="blocked: robots.txt disallows this URL")
-            if self.requests_made >= self.max_requests:  # the allow hook may itself have spent budget
-                raise BudgetExceeded(f"Request budget of {self.max_requests} exhausted before fetching {current!r}")
             self._wait_for_slot(current)
-            self.requests_made += 1
+            self._reserve_request(current)  # atomic check-and-increment, after every wait and hook
             chain.append(current)
             try:
                 # credentials and conditional headers are sent only to the host we were asked to call

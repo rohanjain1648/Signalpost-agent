@@ -61,3 +61,21 @@ def test_hosts_are_cached_independently():
 def test_unreachable_host_is_not_a_disallow_so_the_page_fetch_can_fail_naturally():
     robots = RobotsCache(_client({"https://a.no/robots.txt": ("connect_error", "")}))
     assert robots.allowed("https://a.no/") is True
+
+
+def test_concurrent_lookups_of_one_origin_fetch_robots_txt_once():
+    from concurrent.futures import ThreadPoolExecutor
+
+    import time
+
+    def slow(request: httpx.Request) -> httpx.Response:
+        time.sleep(0.05)  # a slow robots.txt: every thread arrives while the first fetch is still running
+        return httpx.Response(200, text="User-agent: *\nDisallow: /private/\n",
+                              headers={"content-type": "text/plain"})
+
+    client = CountingClient(transport=httpx.MockTransport(slow), max_requests=50, resolver=lambda h: ["8.8.8.8"])
+    robots = RobotsCache(client)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda i: robots.allowed(f"https://a.no/page{i}"), range(40)))
+    assert all(results)
+    assert client.requests_made == 1
