@@ -1,19 +1,23 @@
 # Signalpost: research findings and build plan
 
-## Build status (updated 2026-09-26)
+## Build status (updated 2026-09-26, evening)
 
-Done, all test-first (80 tests): envelope schema, counted + SSRF-guarded HTTP client with per-endpoint throttle,
-BRREG fetch/normalize (identity, accounts + period, filing history, leadership, workplaces, group), tiered
-identity-proof engine (P1-P4 / related / ambiguous), idempotent refresh ledger (stale vs closed, typed changes),
-exactly-N-envelopes batch runner, state store, and the single evaluator command `uv run signalpost --input ... --output ...`.
+**Done, all test-first (174 tests):** envelope schema; counted, SSRF-guarded HTTP client (every redirect hop counted
+and checked; per-endpoint throttle); RFC 9309 robots handling on every hop; BRREG official modules (identity, accounts +
+period, filing history, leadership, workplaces, group); deterministic page extraction (JSON-LD, socials, contacts, jobs,
+priority links); tiered identity engine (P1-P4 / related / ambiguous / placeholder); shared-domain table shipped in
+`data/` (18,854 domains from the BRREG bulk file); website families with page-level evidence; refresh ledger;
+exactly-N-envelopes runner; `uv run signalpost --input ... --output ...`.
 
-Live validation (real BRREG APIs): 100/100 envelopes, 509 requests of 2,000, 3m32s of 45 min, 0 failures.
-Rerun on unchanged sources: 0 changes across 8 live companies. **Headroom left: ~1,490 requests, ~41 min.**
+**Live results (same 100 random companies, real registry + real sites):** 100/100 completed, ~596 requests of 2,000,
+~4.5 min of 45. Official families 99-100%. Websites verified for 3 of 100 (all hand-checked correct); 14 refused as shared
+or other-org; the rest have no candidate. Audit-driven fixes so far: extractor crash on comments outside `<html>`, web crash
+no longer discards official data, unreachable host no longer read as a robots disallow, www/http fallbacks, placeholder
+pages, hostname-only titles, social-profile relevance gate, honest not_available states.
 
-Not built yet: website fetch + extraction (robots, JSON-LD, socials, contact), candidate discovery wiring into the
-pipeline, NAV job feed, BRREG change-event activity, briefing text, static site, gold set, docs set, 1,000-profile artifact.
-
-Drafted 2026-09-26. Revisions close **Oct 18**, round closes **Oct 21**.
+**Biggest remaining gap is coverage, not precision:** ~77% of companies have no website candidate at all. Next: candidate
+discovery (name-derived domains verified only by P1/P4), NAV job feed keyed by org number, BRREG change events as dated
+activity, request-budget planner (reserve official budget), briefing text, static site, gold set, docs, 1,000-profile artifact.
 
 ---
 
