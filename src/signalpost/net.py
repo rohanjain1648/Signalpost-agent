@@ -21,7 +21,7 @@ from typing import Any, Callable
 
 import httpx
 
-USER_AGENT = "signalpost-agent/0.1 (+https://github.com/; company research)"
+USER_AGENT = "signalpost-agent/0.1 (+https://github.com/rohanjain1648/Signalpost-agent; company research)"
 
 Resolver = Callable[[str], list[str]]
 

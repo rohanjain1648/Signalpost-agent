@@ -6,3 +6,6 @@ out/
 state/
 *.egg-info/
 .remember/
+.cache/
+signalpost-starter-kit/
+._signalpost-starter-kit
